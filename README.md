@@ -4,7 +4,7 @@
 
 **[Main Repository](https://github.com/jango-blockchained/hoox-cf-edge-worker)** <!-- TODO: Update Main Repo link -->
 
-A Cloudflare Worker service designed to manage interactions with Web3 wallets (e.g., signing transactions, querying balances). This worker accepts requests via a standardized `/process` endpoint, typically from the `webhook-receiver` or other authenticated internal services.
+A Cloudflare Worker service designed to manage interactions with Web3 wallets (e.g., signing transactions, querying balances). This worker accepts requests via a standardized `/process` endpoint, typically from the `hoox` or other authenticated internal services.
 
 ## Features
 
@@ -30,7 +30,7 @@ A Cloudflare Worker service designed to manage interactions with Web3 wallets (e
     ```
 2.  Set your Cloudflare account ID in `wrangler.jsonc`.
 3.  Configure Secrets (via Cloudflare dashboard Secrets Store or `wrangler secret put`):
-    - `INTERNAL_KEY_BINDING`: The **shared** secret key used for authentication with the `webhook-receiver` or other internal services.
+    - `INTERNAL_KEY_BINDING`: The **shared** secret key used for authentication with the `hoox` or other internal services.
     - `WALLET_PRIVATE_KEY` or `WALLET_SEED_PHRASE`: Your wallet's sensitive information. **Store this securely!**
     - `RPC_URL`: The URL for the blockchain RPC endpoint.
 4.  Update `wrangler.jsonc` with appropriate bindings and variables. Example:
@@ -77,7 +77,7 @@ bun run deploy
 
 ## API Interface
 
-This worker **only** accepts requests from authenticated internal services (like `webhook-receiver`) on the `/process` endpoint.
+This worker **only** accepts requests from authenticated internal services (like `hoox`) on the `/process` endpoint.
 
 - **Method:** `POST`
 - **Endpoint:** `/process`
