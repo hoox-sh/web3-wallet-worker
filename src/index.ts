@@ -1,5 +1,8 @@
 import { ethers } from "ethers";
-import { SecretBinding, Web3TransactionPayload } from "../../src/utils/worker-definitions.ts";
+import {
+  SecretBinding,
+  Web3TransactionPayload,
+} from "../../src/utils/worker-definitions.ts";
 import { ExecutionContext } from "@cloudflare/workers-types";
 
 export interface Env {
@@ -75,39 +78,47 @@ export default {
       // --- Task 10.5: Example Inter-Worker Communication ---
       // Example: Send notification via telegram-worker after wallet initialization
       try {
-          const notificationMessage = `Web3 Wallet Worker initialized successfully. Address: ${wallet.address}`;
+        const notificationMessage = `Web3 Wallet Worker initialized successfully. Address: ${wallet.address}`;
 
-          const telegramPayload = {
-            message: notificationMessage,
-            // chatId: "ADMIN_CHAT_ID", // Optional: Send to a specific admin chat
-          };
+        const telegramPayload = {
+          message: notificationMessage,
+          // chatId: "ADMIN_CHAT_ID", // Optional: Send to a specific admin chat
+        };
 
-          const telegramWorkerRequest = new Request(
-            "https://telegram-worker.your-domain.workers.dev/webhook", // Use telegram-worker webhook endpoint
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(telegramPayload),
-            }
-          );
+        const telegramWorkerRequest = new Request(
+          "https://telegram-worker.your-domain.workers.dev/webhook", // Use telegram-worker webhook endpoint
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(telegramPayload),
+          }
+        );
 
-          console.log(`Calling TELEGRAM_API service binding for notification...`);
-          // const notificationResponse = await env.TELEGRAM_API.fetch(telegramWorkerRequest);
-          // if (!notificationResponse.ok) {
-          //   console.error(
-          //     `Error calling TELEGRAM_API for notification: ${notificationResponse.status} ${await notificationResponse.text()}`
-          //   );
-          //   // Log error, but don't fail the main response
-          // }
-          // else {
-          //    console.log(`Notification sent via TELEGRAM_API.`);
-          // }
-          console.log(`Skipped calling TELEGRAM_API for notification (placeholder).`); // Placeholder log
-
+        console.log(`Calling TELEGRAM_API service binding for notification...`);
+        // const notificationResponse = await env.TELEGRAM_API.fetch(telegramWorkerRequest);
+        // if (!notificationResponse.ok) {
+        //   console.error(
+        //     `Error calling TELEGRAM_API for notification: ${notificationResponse.status} ${await notificationResponse.text()}`
+        //   );
+        //   // Log error, but don't fail the main response
+        // }
+        // else {
+        //    console.log(`Notification sent via TELEGRAM_API.`);
+        // }
+        console.log(
+          `Skipped calling TELEGRAM_API for notification (placeholder).`
+        ); // Placeholder log
       } catch (notificationError: unknown) {
-         const errorMsg = notificationError instanceof Error ? notificationError.message : String(notificationError || "Unknown notification error");
-         console.error(`Exception calling TELEGRAM_API for notification:`, errorMsg, notificationError);
-         // Log error, but don't fail the main response
+        const errorMsg =
+          notificationError instanceof Error
+            ? notificationError.message
+            : String(notificationError || "Unknown notification error");
+        console.error(
+          `Exception calling TELEGRAM_API for notification:`,
+          errorMsg,
+          notificationError
+        );
+        // Log error, but don't fail the main response
       }
       // --- End Task 10.5 ---
 
