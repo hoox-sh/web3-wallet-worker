@@ -2,7 +2,9 @@
   "name": "web3-wallet-worker",
   "main": "src/index.ts",
   "compatibility_date": "2025-03-07",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
@@ -15,6 +17,18 @@
     "binding": "BROWSER"
   },
   "services": [
-     { "binding": "TELEGRAM_API", "service": "telegram-worker" }
-  ]
-} 
+    {
+      "binding": "TELEGRAM_API",
+      "service": "telegram-worker"
+    }
+  ],
+  "secrets_store": {
+    "bindings": [
+      {
+        "binding": "MNEMONIC_BINDING",
+        "store_id": "48433bc559a943f09d9d6c622e188fd5",
+        "secret_name": "MNEMONIC"
+      }
+    ]
+  }
+}
