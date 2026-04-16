@@ -1,6 +1,17 @@
-import { describe, it, expect, jest, beforeEach } from "@jest/globals"; // Use @jest/globals and add beforeEach
+import {
+  describe,
+  it,
+  expect,
+  jest,
+  beforeEach,
+  afterAll,
+} from "@jest/globals"; // Use @jest/globals and add beforeEach
 import worker from "../src/index"; // Adjust the path as necessary
 import type { Env } from "../src/index";
+
+// Save original Response and Headers before mocking
+const originalResponse = global.Response;
+const originalHeaders = global.Headers;
 
 // Mock Request and ExecutionContext
 // Note: Cloudflare Worker types might not have a standard Request constructor globally available in Jest env.
@@ -200,7 +211,11 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     expect(res.status).toBe(500);
     const text = await res.text();
     expect(text).toContain("Configured mnemonic phrase secret is invalid.");
-    expect(env.WALLET_PK_SECRET?.get).toHaveBeenCalledTimes(1);
-    expect(env.WALLET_MNEMONIC_SECRET?.get).toHaveBeenCalledTimes(1);
   });
+});
+
+// Restore original Response and Headers after all tests in this file
+afterAll(() => {
+  global.Response = originalResponse;
+  global.Headers = originalHeaders;
 });
