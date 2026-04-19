@@ -94,19 +94,19 @@ export default {
           }
         );
 
-        console.log(`Calling TELEGRAM_API service binding for notification...`);
-        // const notificationResponse = await env.TELEGRAM_API.fetch(telegramWorkerRequest);
+        console.log(`Calling TELEGRAM_SERVICE service binding for notification...`);
+        // const notificationResponse = await env.TELEGRAM_SERVICE.fetch(telegramWorkerRequest);
         // if (!notificationResponse.ok) {
         //   console.error(
-        //     `Error calling TELEGRAM_API for notification: ${notificationResponse.status} ${await notificationResponse.text()}`
+        //     `Error calling TELEGRAM_SERVICE for notification: ${notificationResponse.status} ${await notificationResponse.text()}`
         //   );
         //   // Log error, but don't fail the main response
         // }
         // else {
-        //    console.log(`Notification sent via TELEGRAM_API.`);
+        //    console.log(`Notification sent via TELEGRAM_SERVICE.`);
         // }
         console.log(
-          `Skipped calling TELEGRAM_API for notification (placeholder).`
+          `Skipped calling TELEGRAM_SERVICE for notification (placeholder).`
         ); // Placeholder log
       } catch (notificationError: unknown) {
         const errorMsg =
@@ -114,7 +114,7 @@ export default {
             ? notificationError.message
             : String(notificationError || "Unknown notification error");
         console.error(
-          `Exception calling TELEGRAM_API for notification:`,
+          `Exception calling TELEGRAM_SERVICE for notification:`,
           errorMsg,
           notificationError
         );

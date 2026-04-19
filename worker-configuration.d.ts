@@ -6,7 +6,7 @@ declare namespace Cloudflare {
 		WALLET_PK_SECRET: null;
 		WALLET_MNEMONIC_SECRET: null;
 		SECRETS: string;
-		TELEGRAM_API: Fetcher;
+		TELEGRAM_SERVICE: Fetcher;
 		BROWSER: Fetcher;
 	}
 }

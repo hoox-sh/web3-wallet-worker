@@ -3,7 +3,7 @@ WALLET_PK_SECRET="{\"PRIVATE_KEY\": \"0xabcdef123456...your...test...key...here.
 WALLET_MNEMONIC_SECRET="{\"MNEMONIC_PHRASE\": \"word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12\"}"
 
 # Service URLs for local development
-TELEGRAM_API_URL=http://localhost:8790
+TELEGRAM_SERVICE_URL=http://localhost:8790
 
 # Note: This file provides example values for local development.
 # Copy this file to .dev.vars and replace with your actual values.
