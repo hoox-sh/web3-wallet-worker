@@ -23,14 +23,5 @@
       "binding": "TELEGRAM_SERVICE",
       "service": "telegram-worker"
     }
-  ],
-  "secrets_store": {
-    "bindings": [
-      {
-        "binding": "MNEMONIC_BINDING",
-        "store_id": "48433bc559a943f09d9d6c622e188fd5",
-        "secret_name": "MNEMONIC"
-      }
-    ]
-  }
+  ]
 }
