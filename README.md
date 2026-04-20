@@ -2,25 +2,25 @@
 
 **Last Updated:** April 2026
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Runtime](https://img.shields.io/badge/Runtime-Bun-black?logo=bun)](https://bun.sh) [![Platform](https://img.shields.io/badge/Platform-Cloudflare%20Edge%20Workers-orange?logo=cloudflare)](https://workers.cloudflare.com/) [![License](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/) [![Build Status](https://img.shields.io/badge/Build-TODO-lightgrey?style=for-the-badge)](https://github.com/jango-blockchained/hoox-cf-edge-worker/actions) <!-- TODO: Update Build Status link -->
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Runtime](https://img.shields.io/badge/Runtime-Bun-black?logo=bun)](https://bun.sh) [![Platform](https://img.shields.io/badge/Platform-Cloudflare®%20Edge%20Workers-orange?logo=cloudflare)](https://workers.cloudflare.com/) [![License](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/) [![Build Status](https://img.shields.io/badge/Build-TODO-lightgrey?style=for-the-badge)](https://github.com/jango-blockchained/hoox-setup/actions) 
 
-**[Main Repository](https://github.com/jango-blockchained/hoox-cf-edge-worker)** <!-- TODO: Update Main Repo link -->
+**[Main Repository](https://github.com/jango-blockchained/hoox-setup)** 
 
-A Cloudflare Worker service designed to manage interactions with Web3 wallets (e.g., signing transactions, querying balances). This worker accepts requests via a standardized `/process` endpoint, typically from the `hoox` or other authenticated internal services.
+A Cloudflare® Worker service designed to manage interactions with Web3 wallets (e.g., signing transactions, querying balances). This worker accepts requests via a standardized `/process` endpoint, typically from the `hoox` or other authenticated internal services.
 
 ## Features
 
 - Securely handles wallet operations.
 - Interfaces with blockchain networks via RPC endpoints.
 - Secure authentication via shared internal key.
-- Uses encrypted storage for sensitive keys or seed phrases (using Cloudflare Secrets).
+- Uses encrypted storage for sensitive keys or seed phrases (using Cloudflare® Secrets).
 
 ## Prerequisites
 
 - Node.js >= 16
 - Bun
 - Wrangler CLI
-- Cloudflare Workers account
+- Cloudflare® Workers account
 - RPC endpoint URL for the desired blockchain network.
 - Wallet private key or seed phrase (to be stored securely).
 
@@ -30,8 +30,8 @@ A Cloudflare Worker service designed to manage interactions with Web3 wallets (e
     ```bash
     bun install
     ```
-2.  Set your Cloudflare account ID in `wrangler.jsonc`.
-3.  Configure Secrets (via Cloudflare dashboard Secrets Store or `wrangler secret put`):
+2.  Set your Cloudflare® account ID in `wrangler.jsonc`.
+3.  Configure Secrets (via Cloudflare® dashboard Secrets Store or `wrangler secret put`):
     - `INTERNAL_KEY_BINDING`: The **shared** secret key used for authentication with the `hoox` or other internal services.
     - `WALLET_PRIVATE_KEY` or `WALLET_SEED_PHRASE`: Your wallet's sensitive information. **Store this securely!**
     - `RPC_URL`: The URL for the blockchain RPC endpoint.
@@ -131,7 +131,7 @@ This worker **only** accepts requests from authenticated internal services (like
 
 - All requests _must_ be received on the `/process` endpoint.
 - Requests _must_ include a valid `internalAuthKey` in the body, matching the `INTERNAL_KEY_BINDING` secret.
-- Private keys/seed phrases are stored securely using Cloudflare Workers Secrets and **should never be hardcoded**.
+- Private keys/seed phrases are stored securely using Cloudflare® Workers Secrets and **should never be hardcoded**.
 - Ensure the RPC URL is trusted.
 
 ## Contributing
@@ -141,3 +141,7 @@ This worker **only** accepts requests from authenticated internal services (like
 3. Commit your changes
 4. Push to the branch
 5. Create a new Pull Request 
+
+---
+
+*Cloudflare® and the Cloudflare logo are trademarks and/or registered trademarks of Cloudflare, Inc. in the United States and other jurisdictions.*
