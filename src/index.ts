@@ -1,8 +1,14 @@
 import { ethers } from "ethers";
-import {
-  SecretBinding,
-  Web3TransactionPayload,
-} from "../../src/utils/worker-definitions.ts";
+export interface SecretBinding {
+  get(): Promise<string | null>;
+}
+
+export interface Web3TransactionPayload {
+  to: string;
+  value: string;
+  data?: string;
+}
+
 import { ExecutionContext } from "@cloudflare/workers-types";
 
 export interface Env {

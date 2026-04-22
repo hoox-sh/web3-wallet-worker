@@ -2,10 +2,10 @@ import {
   describe,
   it,
   expect,
-  jest,
+  vi,
   beforeEach,
   afterAll,
-} from "@jest/globals"; // Use @jest/globals and add beforeEach
+} from "bun:test";
 import worker from "../src/index"; // Adjust the path as necessary
 import type { Env } from "../src/index";
 
@@ -23,14 +23,14 @@ const mockRequest = (url = "http://localhost", method = "GET"): Request =>
     method,
     // Add other Request properties if the worker uses them
     headers: new Headers(),
-    clone: jest.fn(),
+    clone: vi.fn(),
     // ... other necessary Request properties/methods mocked
   }) as unknown as Request;
 
 // Mock ExecutionContext
-const mockCtx: ExecutionContext = {
-  waitUntil: jest.fn(),
-  passThroughOnException: jest.fn(),
+    const mockCtx: any = {
+  waitUntil: vi.fn(),
+  passThroughOnException: vi.fn(),
 };
 
 // Test mnemonic and private key (replace with actual test values if needed, but keep them non-production)
@@ -43,7 +43,7 @@ const EXPECTED_ADDRESS_FROM_MNEMONIC =
   "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"; // Mnemonic above corresponds to this PK/address
 
 // Mock Response class if needed - bun test might provide it, but explicit mock can be safer
-global.Response = jest.fn().mockImplementation((body, init) => {
+global.Response = vi.fn().mockImplementation((body, init) => {
   let jsonData = {};
   try {
     // Attempt to parse only if body looks like JSON (starts with { or [)
@@ -61,28 +61,28 @@ global.Response = jest.fn().mockImplementation((body, init) => {
     status: init?.status || 200,
     headers: new Headers(init?.headers),
     // Return the parsed JSON or empty object
-    json: jest.fn().mockResolvedValue(jsonData),
+    json: vi.fn().mockResolvedValue(jsonData),
     // Return the original body string
-    text: jest.fn().mockResolvedValue(body || ""),
-    clone: jest.fn(),
+    text: vi.fn().mockResolvedValue(body || ""),
+    clone: vi.fn(),
     ok: (init?.status || 200) >= 200 && (init?.status || 200) < 300,
     // ... other necessary Response properties/methods mocked
   };
 }) as unknown as typeof Response;
 
-global.Headers = jest.fn().mockImplementation((init) => {
+global.Headers = vi.fn().mockImplementation((init) => {
   const headers = new Map(Object.entries(init || {}));
   return {
-    append: jest.fn((name, value) => headers.set(name.toLowerCase(), value)),
-    delete: jest.fn((name) => headers.delete(name.toLowerCase())),
-    get: jest.fn((name) => headers.get(name.toLowerCase()) || null),
-    has: jest.fn((name) => headers.has(name.toLowerCase())),
-    set: jest.fn((name, value) => headers.set(name.toLowerCase(), value)),
-    forEach: jest.fn((callback) =>
+    append: vi.fn((name, value) => headers.set(name.toLowerCase(), value)),
+    delete: vi.fn((name) => headers.delete(name.toLowerCase())),
+    get: vi.fn((name) => headers.get(name.toLowerCase()) || null),
+    has: vi.fn((name) => headers.has(name.toLowerCase())),
+    set: vi.fn((name, value) => headers.set(name.toLowerCase(), value)),
+    forEach: vi.fn((callback) =>
       headers.forEach((value, key) => callback(value, key, headers))
     ),
     // Add other Headers methods if needed
-    [Symbol.iterator]: jest.fn(() => headers.entries()),
+    [Symbol.iterator]: vi.fn(() => headers.entries()),
   };
 }) as unknown as typeof Headers;
 
@@ -90,9 +90,9 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
   // Reset mocks before each test
   beforeEach(() => {
     // Reset the mock call counts and recorded calls
-    (global.Response as jest.Mock).mockClear();
-    (mockCtx.waitUntil as jest.Mock).mockClear();
-    (mockCtx.passThroughOnException as jest.Mock).mockClear();
+    (global.Response as any).mockClear();
+    (mockCtx.waitUntil as any).mockClear();
+    (mockCtx.passThroughOnException as any).mockClear();
   });
 
   // Helper to create mock Env with specific secrets
@@ -102,12 +102,12 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
   }): Env => {
     return {
       WALLET_PK_SECRET: {
-        get: jest
+        get: vi
           .fn()
           .mockResolvedValue(secrets.pk !== undefined ? secrets.pk : null),
       },
       WALLET_MNEMONIC_SECRET: {
-        get: jest
+        get: vi
           .fn()
           .mockResolvedValue(
             secrets.mnemonic !== undefined ? secrets.mnemonic : null
