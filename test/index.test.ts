@@ -101,18 +101,8 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     mnemonic?: string | null;
   }): Env => {
     return {
-      WALLET_PK_SECRET: {
-        get: vi
-          .fn()
-          .mockResolvedValue(secrets.pk !== undefined ? secrets.pk : null),
-      },
-      WALLET_MNEMONIC_SECRET: {
-        get: vi
-          .fn()
-          .mockResolvedValue(
-            secrets.mnemonic !== undefined ? secrets.mnemonic : null
-          ),
-      },
+      WALLET_PK_SECRET: secrets.pk !== undefined ? (secrets.pk as string | undefined) : undefined,
+      WALLET_MNEMONIC_SECRET: secrets.mnemonic !== undefined ? (secrets.mnemonic as string | undefined) : undefined,
       TELEGRAM_SERVICE: {
         fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 })),
         connect: vi.fn(),
@@ -131,9 +121,6 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
       "Worker initialized successfully using Secrets Store."
     );
     expect(json.walletAddress).toBe(EXPECTED_ADDRESS_FROM_PK);
-    // Check if the correct secret was requested
-    expect(env.WALLET_PK_SECRET?.get).toHaveBeenCalledTimes(1);
-    expect(env.WALLET_MNEMONIC_SECRET?.get).toHaveBeenCalledTimes(1); // Both are checked initially
   });
 
   it("should initialize with MNEMONIC_PHRASE and return correct address", async () => {
@@ -147,9 +134,6 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
       "Worker initialized successfully using Secrets Store."
     );
     expect(json.walletAddress).toBe(EXPECTED_ADDRESS_FROM_MNEMONIC);
-    // Check if the correct secret was requested
-    expect(env.WALLET_PK_SECRET?.get).toHaveBeenCalledTimes(1);
-    expect(env.WALLET_MNEMONIC_SECRET?.get).toHaveBeenCalledTimes(1);
   });
 
   it("should prioritize PRIVATE_KEY over MNEMONIC_PHRASE", async () => {
@@ -163,8 +147,6 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     expect(res.status).toBe(200);
     const json: any = await res.json();
     expect(json.walletAddress).toBe(EXPECTED_ADDRESS_FROM_PK); // PK address expected
-    expect(env.WALLET_PK_SECRET?.get).toHaveBeenCalledTimes(1);
-    expect(env.WALLET_MNEMONIC_SECRET?.get).toHaveBeenCalledTimes(1);
   });
 
   it("should return 500 if no secrets are configured/retrieved", async () => {
@@ -177,8 +159,6 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     expect(text).toContain(
       "Required wallet secret binding not configured or accessible."
     );
-    expect(env.WALLET_PK_SECRET?.get).toHaveBeenCalledTimes(1);
-    expect(env.WALLET_MNEMONIC_SECRET?.get).toHaveBeenCalledTimes(1);
   });
 
   it("should return 500 if secrets retrieved are null", async () => {
@@ -191,8 +171,6 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     expect(text).toContain(
       "Required wallet secret binding not configured or accessible."
     );
-    expect(env.WALLET_PK_SECRET?.get).toHaveBeenCalledTimes(1);
-    expect(env.WALLET_MNEMONIC_SECRET?.get).toHaveBeenCalledTimes(1);
   });
 
   it("should return 500 for invalid PRIVATE_KEY format", async () => {
@@ -203,8 +181,6 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     expect(res.status).toBe(500);
     const text = await res.text();
     expect(text).toContain("Configured private key secret is invalid.");
-    expect(env.WALLET_PK_SECRET?.get).toHaveBeenCalledTimes(1);
-    expect(env.WALLET_MNEMONIC_SECRET?.get).toHaveBeenCalledTimes(1);
   });
 
   it("should return 500 for invalid MNEMONIC_PHRASE format", async () => {

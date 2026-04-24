@@ -1,10 +1,6 @@
 import { ethers } from "ethers";
 import type { Fetcher } from "@cloudflare/workers-types";
 
-export interface SecretBinding {
-  get(): Promise<string | null>;
-}
-
 export interface Web3TransactionPayload {
   to: string;
   value: string;
@@ -21,8 +17,8 @@ export interface Env {
   // D1Database: DB;
 
   // Secrets Store Bindings (names match wrangler.toml)
-  WALLET_PK_SECRET?: SecretBinding;
-  WALLET_MNEMONIC_SECRET?: SecretBinding;
+  WALLET_PK_SECRET?: string;
+  WALLET_MNEMONIC_SECRET?: string;
 
   // Service bindings
   TELEGRAM_SERVICE: Fetcher;
@@ -41,8 +37,8 @@ export default {
 
     try {
       // Attempt to get secrets from Secrets Store bindings
-      const privateKey = await env.WALLET_PK_SECRET?.get();
-      const mnemonic = await env.WALLET_MNEMONIC_SECRET?.get();
+      const privateKey = env.WALLET_PK_SECRET;
+      const mnemonic = env.WALLET_MNEMONIC_SECRET;
 
       if (privateKey) {
         // Prioritize Private Key if retrieved
