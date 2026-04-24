@@ -113,6 +113,10 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
             secrets.mnemonic !== undefined ? secrets.mnemonic : null
           ),
       },
+      TELEGRAM_SERVICE: {
+        fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 })),
+        connect: vi.fn(),
+      },
     };
   };
 
