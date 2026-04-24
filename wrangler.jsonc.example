@@ -1,0 +1,39 @@
+{
+  "name": "web3-wallet-worker",
+  // ACCOUNT_ID: Get from Cloudflare Dashboard > Overview > Account ID
+  "account_id": "YOUR_ACCOUNT_ID",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-07",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+
+  // OBSERVABILITY: Enable logging and sampling
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+
+  // VARS: Environment variables (secrets set via `wrangler secret put`)
+  "vars": {
+    // WALLET_PK_SECRET: Ethereum private key (without 0x prefix)
+    // Set via: wrangler secret put WALLET_PK_SECRET
+    "WALLET_PK_SECRET": null,
+    // WALLET_MNEMONIC_SECRET: Wallet recovery phrase (12/24 words)
+    // Set via: wrangler secret put WALLET_MNEMONIC_SECRET
+    "WALLET_MNEMONIC_SECRET": null
+  },
+
+  // BROWSER: Puppeteer browser for web3 interactions (UniSwap, etc.)
+  "browser": {
+    "binding": "BROWSER"
+  },
+
+  // SERVICES: Service bindings to other workers
+  "services": [
+    {
+      "binding": "TELEGRAM_SERVICE",
+      "service": "telegram-worker"
+    }
+  ]
+}
