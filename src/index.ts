@@ -89,12 +89,15 @@ export default {
 
         // Use TELEGRAM_SERVICE binding - no URL needed
         console.log(`Calling TELEGRAM_SERVICE binding for notification...`);
-        const notificationResponse = await env.TELEGRAM_SERVICE.fetch('/webhook', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: notificationMessage }),
-        });
-        
+        const notificationResponse = await env.TELEGRAM_SERVICE.fetch(
+          "/webhook",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: notificationMessage }),
+          }
+        );
+
         if (!notificationResponse.ok) {
           console.error(
             `Error calling TELEGRAM_SERVICE for notification: ${notificationResponse.status} ${await notificationResponse.text()}`

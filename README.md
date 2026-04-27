@@ -2,9 +2,9 @@
 
 **Last Updated:** April 2026
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Runtime](https://img.shields.io/badge/Runtime-Bun-black?logo=bun)](https://bun.sh) [![Platform](https://img.shields.io/badge/Platform-Cloudflare®%20Edge%20Workers-orange?logo=cloudflare)](https://workers.cloudflare.com/) [![License](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/) [![Build Status](https://github.com/jango-blockchained/hoox-setup/actions/workflows/opencode.yml/badge.svg)](https://github.com/jango-blockchained/hoox-setup/actions/workflows/opencode.yml) 
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Runtime](https://img.shields.io/badge/Runtime-Bun-black?logo=bun)](https://bun.sh) [![Platform](https://img.shields.io/badge/Platform-Cloudflare®%20Edge%20Workers-orange?logo=cloudflare)](https://workers.cloudflare.com/) [![License](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/) [![Build Status](https://github.com/jango-blockchained/hoox-setup/actions/workflows/opencode.yml/badge.svg)](https://github.com/jango-blockchained/hoox-setup/actions/workflows/opencode.yml)
 
-**[Main Repository](https://github.com/jango-blockchained/hoox-setup)** 
+**[Main Repository](https://github.com/jango-blockchained/hoox-setup)**
 
 A Cloudflare® Worker service designed to manage interactions with Web3 wallets (e.g., signing transactions, querying balances). This worker accepts requests via a standardized `/process` endpoint, typically from the `hoox` or other authenticated internal services.
 
@@ -44,12 +44,12 @@ A Cloudflare® Worker service designed to manage interactions with Web3 wallets 
       "compatibility_flags": ["nodejs_compat"],
       "account_id": "YOUR_CLOUDFLARE_ACCOUNT_ID",
       "vars": {
-        "RPC_URL": null // Will be populated by wrangler secret put RPC_URL
+        "RPC_URL": null, // Will be populated by wrangler secret put RPC_URL
       },
       "secrets": [
         "INTERNAL_KEY_BINDING",
-        "WALLET_PRIVATE_KEY" // Or WALLET_SEED_PHRASE
-      ]
+        "WALLET_PRIVATE_KEY", // Or WALLET_SEED_PHRASE
+      ],
       // Add other bindings if needed (KV, Queues, etc.)
     }
     ```
@@ -140,8 +140,8 @@ This worker **only** accepts requests from authenticated internal services (like
 2. Create your feature branch
 3. Commit your changes
 4. Push to the branch
-5. Create a new Pull Request 
+5. Create a new Pull Request
 
 ---
 
-*Cloudflare® and the Cloudflare logo are trademarks and/or registered trademarks of Cloudflare, Inc. in the United States and other jurisdictions.*
+_Cloudflare® and the Cloudflare logo are trademarks and/or registered trademarks of Cloudflare, Inc. in the United States and other jurisdictions._

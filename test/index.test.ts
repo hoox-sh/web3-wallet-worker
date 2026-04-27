@@ -1,11 +1,4 @@
-import {
-  describe,
-  it,
-  expect,
-  vi,
-  beforeEach,
-  afterAll,
-} from "bun:test";
+import { describe, it, expect, vi, beforeEach, afterAll } from "bun:test";
 import worker from "../src/index"; // Adjust the path as necessary
 import type { Env } from "../src/index";
 
@@ -28,7 +21,7 @@ const mockRequest = (url = "http://localhost", method = "GET"): Request =>
   }) as unknown as Request;
 
 // Mock ExecutionContext
-    const mockCtx: any = {
+const mockCtx: any = {
   waitUntil: vi.fn(),
   passThroughOnException: vi.fn(),
 };
@@ -101,10 +94,20 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     mnemonic?: string | null;
   }): Env => {
     return {
-      WALLET_PK_SECRET: secrets.pk !== undefined ? (secrets.pk as string | undefined) : undefined,
-      WALLET_MNEMONIC_SECRET: secrets.mnemonic !== undefined ? (secrets.mnemonic as string | undefined) : undefined,
+      WALLET_PK_SECRET:
+        secrets.pk !== undefined
+          ? (secrets.pk as string | undefined)
+          : undefined,
+      WALLET_MNEMONIC_SECRET:
+        secrets.mnemonic !== undefined
+          ? (secrets.mnemonic as string | undefined)
+          : undefined,
       TELEGRAM_SERVICE: {
-        fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 })),
+        fetch: vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ success: true }), { status: 200 })
+          ),
         connect: vi.fn(),
       },
     };
