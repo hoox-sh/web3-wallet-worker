@@ -1,13 +1,10 @@
 import { ethers } from "ethers";
 import type { Fetcher } from "@cloudflare/workers-types";
 
-export interface Web3TransactionPayload {
-  to: string;
-  value: string;
-  data?: string;
-}
-
 import { ExecutionContext } from "@cloudflare/workers-types";
+import { createErrorResponse, Errors } from '@hoox/shared/errors';
+import { createLogger } from '@hoox/shared/middleware';
+import type { StandardResponse } from '@hoox/shared/types';
 
 export interface Env {
   // Define bindings here
@@ -48,9 +45,7 @@ export default {
           console.error(
             "Retrieved WALLET_PK_SECRET secret has invalid format."
           );
-          return new Response("Configured private key secret is invalid.", {
-            status: 500,
-          });
+          return Errors.badRequest("Configured private key secret is invalid.");
         }
         wallet = new ethers.Wallet(
           privateKey.startsWith("0x") ? privateKey : "0x" + privateKey
@@ -63,9 +58,7 @@ export default {
           console.error(
             "Retrieved WALLET_MNEMONIC_SECRET secret has invalid format."
           );
-          return new Response("Configured mnemonic phrase secret is invalid.", {
-            status: 500,
-          });
+          return Errors.badRequest("Configured mnemonic phrase secret is invalid.");
         }
         wallet = ethers.Wallet.fromPhrase(mnemonic);
       } else {
@@ -73,10 +66,7 @@ export default {
         console.error(
           "Could not retrieve WALLET_PK_SECRET or WALLET_MNEMONIC_SECRET from bindings."
         );
-        return new Response(
-          "Required wallet secret binding not configured or accessible.",
-          { status: 500 }
-        );
+        return Errors.internal("Required wallet secret binding not configured or accessible.");
       }
 
       // Wallet created successfully
@@ -118,7 +108,7 @@ export default {
       }
       // --- End Task 10.5 ---
 
-      // Example: Return the wallet address
+      // Return success response
       const responseBody = JSON.stringify({
         message: "Worker initialized successfully using Secrets Store.",
         walletAddress: wallet.address,

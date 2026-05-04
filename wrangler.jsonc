@@ -6,19 +6,19 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 1,
+    "head_sampling_rate": 1
   },
   "vars": {
     "WALLET_PK_SECRET": null,
-    "WALLET_MNEMONIC_SECRET": null,
+    "WALLET_MNEMONIC_SECRET": null
   },
   "browser": {
-    "binding": "BROWSER",
+    "binding": "BROWSER"
   },
   "services": [
     {
       "binding": "TELEGRAM_SERVICE",
-      "service": "telegram-worker",
-    },
-  ],
+      "service": "telegram-worker"
+    }
+  ]
 }
