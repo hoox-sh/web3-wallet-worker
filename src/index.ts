@@ -19,6 +19,27 @@ export interface Env {
 
   // Service bindings
   TELEGRAM_SERVICE: Fetcher;
+  ANALYTICS_SERVICE?: Fetcher;
+}
+
+// Analytics tracking helper
+async function trackAnalytics(
+  env: Env,
+  endpoint: string,
+  body: Record<string, any>
+): Promise<void> {
+  if (!env.ANALYTICS_SERVICE) return;
+  try {
+    await env.ANALYTICS_SERVICE.fetch(
+      new Request("http://analytics-service" + endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }) as any
+    );
+  } catch (e) {
+    console.error("Analytics tracking failed:", e);
+  }
 }
 
 export default {
@@ -71,6 +92,14 @@ export default {
 
       // Wallet created successfully
       console.log(`Wallet Address: ${wallet.address}`);
+
+      // Track wallet operation analytics (non-blocking)
+      trackAnalytics(env, "/track/api-call", {
+        worker: "web3-wallet-worker",
+        endpoint: "/",
+        latencyMs: 0,
+        success: true,
+      });
 
       // --- Task 10.5: Example Inter-Worker Communication ---
       // Example: Send notification via telegram-worker after wallet initialization
