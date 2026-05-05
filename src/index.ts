@@ -31,7 +31,7 @@ async function trackAnalytics(
   if (!env.ANALYTICS_SERVICE) return;
   try {
     await env.ANALYTICS_SERVICE.fetch(
-      new Request("http://analytics-service" + endpoint, {
+      new Request("http://localhost" + endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -105,24 +105,29 @@ export default {
       // Example: Send notification via telegram-worker after wallet initialization
       try {
         const notificationMessage = `Web3 Wallet Worker initialized successfully. Address: ${wallet.address}`;
-
-        // Use TELEGRAM_SERVICE binding - no URL needed
-        console.log(`Calling TELEGRAM_SERVICE binding for notification...`);
-        const notificationResponse = await env.TELEGRAM_SERVICE.fetch(
-          "/webhook",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: notificationMessage }),
-          }
-        );
-
-        if (!notificationResponse.ok) {
-          console.error(
-            `Error calling TELEGRAM_SERVICE for notification: ${notificationResponse.status} ${await notificationResponse.text()}`
-          );
+        
+        // Check if TELEGRAM_SERVICE is bound
+        if (!env.TELEGRAM_SERVICE) {
+          console.warn("TELEGRAM_SERVICE binding not configured, skipping notification");
         } else {
-          console.log(`Notification sent via TELEGRAM_SERVICE binding.`);
+          // Use TELEGRAM_SERVICE binding - no URL needed
+          console.log(`Calling TELEGRAM_SERVICE binding for notification...`);
+          const notificationResponse = await env.TELEGRAM_SERVICE.fetch(
+            "/webhook",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message: notificationMessage }),
+            }
+          );
+
+          if (!notificationResponse.ok) {
+            console.error(
+              `Error calling TELEGRAM_SERVICE for notification: ${notificationResponse.status} ${await notificationResponse.text()}`
+            );
+          } else {
+            console.log(`Notification sent via TELEGRAM_SERVICE binding.`);
+          }
         }
       } catch (notificationError: unknown) {
         const errorMsg =
