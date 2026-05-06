@@ -14,8 +14,9 @@
     "checkJs": false,
     "noEmit": true,
     "isolatedModules": true,
-    "types": [],
+    "types": ["@cloudflare/workers-types"],
     "rootDir": "./src",
+    "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
