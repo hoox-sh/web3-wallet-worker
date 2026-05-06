@@ -176,22 +176,22 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     );
   });
 
-  it("should return 500 for invalid PRIVATE_KEY format", async () => {
+  it("should return 400 for invalid PRIVATE_KEY format", async () => {
     const env = createMockEnv({ pk: "invalid-key" });
     const req = mockRequest();
     const res = await worker.fetch(req, env, mockCtx);
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
     const text = await res.text();
     expect(text).toContain("Configured private key secret is invalid.");
   });
 
-  it("should return 500 for invalid MNEMONIC_PHRASE format", async () => {
+  it("should return 400 for invalid MNEMONIC_PHRASE format", async () => {
     const env = createMockEnv({ mnemonic: "invalid phrase" });
     const req = mockRequest();
     const res = await worker.fetch(req, env, mockCtx);
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
     const text = await res.text();
     expect(text).toContain("Configured mnemonic phrase secret is invalid.");
   });

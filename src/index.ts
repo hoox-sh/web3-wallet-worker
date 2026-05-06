@@ -5,41 +5,16 @@ import { ExecutionContext } from "@cloudflare/workers-types";
 import { createErrorResponse, Errors } from '@hoox/shared/errors';
 import { createLogger } from '@hoox/shared/middleware';
 import type { StandardResponse } from '@hoox/shared/types';
+import { trackAnalytics } from '@hoox/shared/analytics';
+import type { AnalyticsEnv } from '@hoox/shared/analytics';
 
-export interface Env {
-  // Define bindings here
-  // KVNamespace: MY_KV_NAMESPACE;
-  // DurableObjectNamespace: MY_DURABLE_OBJECT;
-  // R2Bucket: MY_BUCKET;
-  // D1Database: DB;
-
+export interface Env extends AnalyticsEnv {
   // Secrets Store Bindings (names match wrangler.toml)
   WALLET_PK_SECRET?: string;
   WALLET_MNEMONIC_SECRET?: string;
 
   // Service bindings
   TELEGRAM_SERVICE: Fetcher;
-  ANALYTICS_SERVICE?: Fetcher;
-}
-
-// Analytics tracking helper
-async function trackAnalytics(
-  env: Env,
-  endpoint: string,
-  body: Record<string, any>
-): Promise<void> {
-  if (!env.ANALYTICS_SERVICE) return;
-  try {
-    await env.ANALYTICS_SERVICE.fetch(
-      new Request("http://localhost" + endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }) as any
-    );
-  } catch (e) {
-    console.error("Analytics tracking failed:", e);
-  }
 }
 
 export default {
