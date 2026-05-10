@@ -1,12 +1,18 @@
 import { ethers } from "ethers";
 import type { Fetcher } from "@cloudflare/workers-types";
-
 import { ExecutionContext } from "@cloudflare/workers-types";
-import { createErrorResponse, Errors } from '@hoox/shared/errors';
-import { createLogger } from '@hoox/shared/middleware';
-import type { StandardResponse } from '@hoox/shared/types';
-import { trackAnalytics } from '@hoox/shared/analytics';
-import type { AnalyticsEnv } from '@hoox/shared/analytics';
+
+import {
+  createErrorResponse,
+  Errors,
+} from "@jango-blockchained/hoox-shared/errors";
+import { withRequestLog } from "@jango-blockchained/hoox-shared/middleware";
+import type { StandardResponse } from "@jango-blockchained/hoox-shared/types";
+import { trackAnalytics } from "@jango-blockchained/hoox-shared/analytics";
+import type { AnalyticsEnv } from "@jango-blockchained/hoox-shared/analytics";
+import { healthCheck } from "@jango-blockchained/hoox-shared/health";
+import { createRouter } from "@jango-blockchained/hoox-shared/router";
+import type { Handler } from "@jango-blockchained/hoox-shared/types/router";
 
 export interface Env extends AnalyticsEnv {
   // Secrets Store Bindings (names match wrangler.toml)
@@ -17,12 +23,11 @@ export interface Env extends AnalyticsEnv {
   TELEGRAM_SERVICE: Fetcher;
 }
 
-export default {
-  async fetch(
-    request: Request,
-    env: Env,
-    _ctx: ExecutionContext
-  ): Promise<Response> {
+const router = createRouter<Env>();
+
+router.get(
+  "/",
+  async (request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> => {
     console.log(`Handling request: ${request.method} ${request.url}`);
 
     // Allow wallet to be either HDNodeWallet (fromPhrase) or Wallet (from private key)
@@ -54,7 +59,9 @@ export default {
           console.error(
             "Retrieved WALLET_MNEMONIC_SECRET secret has invalid format."
           );
-          return Errors.badRequest("Configured mnemonic phrase secret is invalid.");
+          return Errors.badRequest(
+            "Configured mnemonic phrase secret is invalid."
+          );
         }
         wallet = ethers.Wallet.fromPhrase(mnemonic);
       } else {
@@ -62,7 +69,9 @@ export default {
         console.error(
           "Could not retrieve WALLET_PK_SECRET or WALLET_MNEMONIC_SECRET from bindings."
         );
-        return Errors.internal("Required wallet secret binding not configured or accessible.");
+        return Errors.internal(
+          "Required wallet secret binding not configured or accessible."
+        );
       }
 
       // Wallet created successfully
@@ -80,10 +89,12 @@ export default {
       // Example: Send notification via telegram-worker after wallet initialization
       try {
         const notificationMessage = `Web3 Wallet Worker initialized successfully. Address: ${wallet.address}`;
-        
+
         // Check if TELEGRAM_SERVICE is bound
         if (!env.TELEGRAM_SERVICE) {
-          console.warn("TELEGRAM_SERVICE binding not configured, skipping notification");
+          console.warn(
+            "TELEGRAM_SERVICE binding not configured, skipping notification"
+          );
         } else {
           // Use TELEGRAM_SERVICE binding - no URL needed
           console.log(`Calling TELEGRAM_SERVICE binding for notification...`);
@@ -135,5 +146,20 @@ export default {
         status: 500,
       });
     }
-  },
+  }
+);
+
+router.get(
+  "/health",
+  async (_request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> => {
+    return healthCheck({ worker: "web3-wallet-worker" });
+  }
+);
+
+export default {
+  fetch: withRequestLog(
+    (request: Request, env: Env, ctx: ExecutionContext) =>
+      router.handle(request, env, ctx),
+    { service: "web3-wallet-worker", module: "router" }
+  ),
 };

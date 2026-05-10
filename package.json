@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.1.0",
-    "@hoox/shared": "workspace:*",
+    "@jango-blockchained/hoox-shared": "workspace:*",
     "ethers": "^6.16.0"
   }
 }
