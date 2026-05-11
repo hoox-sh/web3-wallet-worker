@@ -5,6 +5,7 @@ import { ExecutionContext } from "@cloudflare/workers-types";
 import {
   createErrorResponse,
   Errors,
+  toError,
 } from "@jango-blockchained/hoox-shared/errors";
 import { withRequestLog } from "@jango-blockchained/hoox-shared/middleware";
 import type { StandardResponse } from "@jango-blockchained/hoox-shared/types";
@@ -120,10 +121,7 @@ router.get(
           }
         }
       } catch (notificationError: unknown) {
-        const errorMsg =
-          notificationError instanceof Error
-            ? notificationError.message
-            : String(notificationError || "Unknown notification error");
+        const errorMsg = toError(notificationError, "Unknown notification error");
         console.error(
           `Exception calling TELEGRAM_SERVICE for notification:`,
           errorMsg,
@@ -142,10 +140,9 @@ router.get(
         headers: { "Content-Type": "application/json" },
         // status defaults to 200
       });
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("Error processing request:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : "An unknown error occurred";
+      const errorMessage = toError(error, "An unknown error occurred");
       return new Response(`Internal Server Error: ${errorMessage}`, {
         status: 500,
       });
