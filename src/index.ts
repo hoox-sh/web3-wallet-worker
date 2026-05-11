@@ -27,7 +27,11 @@ const router = createRouter<Env>();
 
 router.get(
   "/",
-  async (request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> => {
+  async (
+    request: Request,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<Response> => {
     console.log(`Handling request: ${request.method} ${request.url}`);
 
     // Allow wallet to be either HDNodeWallet (fromPhrase) or Wallet (from private key)
@@ -151,7 +155,11 @@ router.get(
 
 router.get(
   "/health",
-  async (_request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> => {
+  async (
+    _request: Request,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<Response> => {
     return healthCheck({ worker: "web3-wallet-worker" });
   }
 );
