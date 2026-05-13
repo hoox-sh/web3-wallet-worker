@@ -7,8 +7,8 @@ declare namespace Cloudflare {
   }
   interface Env {
     BROWSER: Fetcher;
-    WALLET_PK_SECRET: null;
-    WALLET_MNEMONIC_SECRET: null;
+    WALLET_PK_SECRET: string;
+    WALLET_MNEMONIC_SECRET: string;
     TELEGRAM_SERVICE: Fetcher /* telegram-worker */;
   }
 }
