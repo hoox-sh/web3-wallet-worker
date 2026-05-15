@@ -15,6 +15,7 @@ import type { StandardResponse } from "@jango-blockchained/hoox-shared/types";
 import { trackAnalytics } from "@jango-blockchained/hoox-shared/analytics";
 import type { AnalyticsEnv } from "@jango-blockchained/hoox-shared/analytics";
 import { healthCheck } from "@jango-blockchained/hoox-shared/health";
+import { serviceFetch } from "@jango-blockchained/hoox-shared/service-bindings";
 import { createRouter } from "@jango-blockchained/hoox-shared/router";
 import type { Handler } from "@jango-blockchained/hoox-shared/types/router";
 
@@ -105,16 +106,8 @@ router.get(
                 "TELEGRAM_SERVICE binding not configured, skipping notification"
               );
             } else {
-              // Use TELEGRAM_SERVICE binding - no URL needed
               logger.info("Calling TELEGRAM_SERVICE binding for notification");
-              const notificationResponse = await env.TELEGRAM_SERVICE.fetch(
-                "/webhook",
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ message: notificationMessage }),
-                }
-              );
+              const notificationResponse = await serviceFetch(env.TELEGRAM_SERVICE, "/webhook", { message: notificationMessage });
 
               if (!notificationResponse.ok) {
                 const errorText = await notificationResponse.text();
@@ -155,10 +148,7 @@ router.get(
       });
     } catch (error: unknown) {
       logger.error("Error processing request", { error });
-      const errorMessage = toError(error, "An unknown error occurred");
-      return new Response(`Internal Server Error: ${errorMessage}`, {
-        status: 500,
-      });
+      return Errors.internal(error);
     }
   }
 );
