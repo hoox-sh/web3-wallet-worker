@@ -107,7 +107,11 @@ router.get(
               );
             } else {
               logger.info("Calling TELEGRAM_SERVICE binding for notification");
-              const notificationResponse = await serviceFetch(env.TELEGRAM_SERVICE, "/webhook", { message: notificationMessage });
+              const notificationResponse = await serviceFetch(
+                env.TELEGRAM_SERVICE,
+                "/webhook",
+                { message: notificationMessage }
+              );
 
               if (!notificationResponse.ok) {
                 const errorText = await notificationResponse.text();
