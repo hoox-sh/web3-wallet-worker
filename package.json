@@ -18,7 +18,6 @@
     "wrangler": "^4.83.0"
   },
   "dependencies": {
-    "@cloudflare/puppeteer": "^1.1.0",
     "@jango-blockchained/hoox-shared": "workspace:*",
     "ethers": "^6.16.0"
   }
