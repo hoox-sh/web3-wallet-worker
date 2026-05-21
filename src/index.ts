@@ -4,6 +4,7 @@ import { ExecutionContext } from "@cloudflare/workers-types";
 
 import {
   createErrorResponse,
+  createJsonResponse,
   Errors,
   toError,
 } from "@jango-blockchained/hoox-shared/errors";
@@ -19,12 +20,54 @@ import { serviceFetch } from "@jango-blockchained/hoox-shared/service-bindings";
 import { createRouter } from "@jango-blockchained/hoox-shared/router";
 import type { Handler } from "@jango-blockchained/hoox-shared/types/router";
 
-export interface Env extends Cloudflare.Env {
+export interface Env extends Cloudflare.Env, AnalyticsEnv {
   [key: string]: unknown;
 }
 
 const router = createRouter<Env>();
 const logger = createLogger({ service: "web3-wallet-worker" });
+
+/**
+ * Sends a wallet initialization notification via the TELEGRAM_SERVICE binding.
+ * Designed to be used with ctx.waitUntil() for fire-and-forget execution.
+ */
+async function sendNotification(
+  wallet: ethers.HDNodeWallet | ethers.Wallet,
+  env: Env
+): Promise<void> {
+  try {
+    const notificationMessage = `Web3 Wallet Worker initialized successfully. Address: ${wallet.address}`;
+
+    if (!env.TELEGRAM_SERVICE) {
+      logger.warn(
+        "TELEGRAM_SERVICE binding not configured, skipping notification"
+      );
+    } else {
+      logger.info("Calling TELEGRAM_SERVICE binding for notification");
+      const notificationResponse = await serviceFetch(
+        env.TELEGRAM_SERVICE,
+        "/webhook",
+        { message: notificationMessage }
+      );
+
+      if (!notificationResponse.ok) {
+        const errorText = await notificationResponse.text();
+        logger.error("Error calling TELEGRAM_SERVICE for notification", {
+          status: notificationResponse.status,
+          responseText: errorText,
+        });
+      } else {
+        logger.info("Notification sent via TELEGRAM_SERVICE binding");
+      }
+    }
+  } catch (notificationError: unknown) {
+    const errorMsg = toError(notificationError, "Unknown notification error");
+    logger.error("Exception calling TELEGRAM_SERVICE for notification", {
+      errorMsg,
+      notificationError,
+    });
+  }
+}
 
 router.get(
   "/",
@@ -93,63 +136,17 @@ router.get(
         })
       );
 
-      // --- Task 10.5: Example Inter-Worker Communication ---
-      // Example: Send notification via telegram-worker after wallet initialization
-      ctx.waitUntil(
-        (async () => {
-          try {
-            const notificationMessage = `Web3 Wallet Worker initialized successfully. Address: ${wallet.address}`;
-
-            // Check if TELEGRAM_SERVICE is bound
-            if (!env.TELEGRAM_SERVICE) {
-              logger.warn(
-                "TELEGRAM_SERVICE binding not configured, skipping notification"
-              );
-            } else {
-              logger.info("Calling TELEGRAM_SERVICE binding for notification");
-              const notificationResponse = await serviceFetch(
-                env.TELEGRAM_SERVICE,
-                "/webhook",
-                { message: notificationMessage }
-              );
-
-              if (!notificationResponse.ok) {
-                const errorText = await notificationResponse.text();
-                logger.error(
-                  "Error calling TELEGRAM_SERVICE for notification",
-                  {
-                    status: notificationResponse.status,
-                    responseText: errorText,
-                  }
-                );
-              } else {
-                logger.info("Notification sent via TELEGRAM_SERVICE binding");
-              }
-            }
-          } catch (notificationError: unknown) {
-            const errorMsg = toError(
-              notificationError,
-              "Unknown notification error"
-            );
-            logger.error(
-              "Exception calling TELEGRAM_SERVICE for notification",
-              { errorMsg, notificationError }
-            );
-          }
-        })()
-      );
-      // --- End Task 10.5 ---
+      // Send wallet initialization notification via TELEGRAM_SERVICE (non-blocking)
+      ctx.waitUntil(sendNotification(wallet, env));
 
       // Return success response
-      const responseBody = JSON.stringify({
-        message: "Worker initialized successfully using Secrets Store.",
-        walletAddress: wallet.address,
-      });
-
-      return new Response(responseBody, {
-        headers: { "Content-Type": "application/json" },
-        // status defaults to 200
-      });
+      return createJsonResponse(
+        {
+          message: "Worker initialized successfully using Secrets Store.",
+          walletAddress: wallet.address,
+        },
+        200
+      );
     } catch (error: unknown) {
       logger.error("Error processing request", { error });
       return Errors.internal(error);
