@@ -11,6 +11,7 @@ import {
 import {
   createLogger,
   withRequestLog,
+  createInternalAuthMiddleware,
 } from "@jango-blockchained/hoox-shared/middleware";
 import type { StandardResponse } from "@jango-blockchained/hoox-shared/types";
 import { trackAnalytics } from "@jango-blockchained/hoox-shared/analytics";
@@ -22,9 +23,11 @@ import type { Handler } from "@jango-blockchained/hoox-shared/types/router";
 
 export interface Env extends Cloudflare.Env, AnalyticsEnv {
   [key: string]: unknown;
+  INTERNAL_KEY_BINDING?: string;
 }
 
 const router = createRouter<Env>();
+const requireAuth = createInternalAuthMiddleware();
 const logger = createLogger({ service: "web3-wallet-worker" });
 
 /**
@@ -151,7 +154,8 @@ router.get(
       logger.error("Error processing request", { error });
       return Errors.internal(error);
     }
-  }
+  },
+  [requireAuth]
 );
 
 router.get(
