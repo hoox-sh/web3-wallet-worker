@@ -18,7 +18,6 @@ import { serviceFetch } from "@jango-blockchained/hoox-shared/service-bindings";
 import { createRouter } from "@jango-blockchained/hoox-shared/router";
 
 export interface Env extends Cloudflare.Env, AnalyticsEnv {
-  [key: string]: unknown;
   INTERNAL_KEY_BINDING?: string;
 }
 
