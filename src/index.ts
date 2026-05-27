@@ -1,9 +1,7 @@
 import { ethers } from "ethers";
-import type { Fetcher } from "@cloudflare/workers-types";
-import { ExecutionContext } from "@cloudflare/workers-types";
+// ExecutionContext and Fetcher are globally declared by worker-configuration.d.ts
 
 import {
-  createErrorResponse,
   createJsonResponse,
   Errors,
   toError,
@@ -13,13 +11,11 @@ import {
   withRequestLog,
   createInternalAuthMiddleware,
 } from "@jango-blockchained/hoox-shared/middleware";
-import type { StandardResponse } from "@jango-blockchained/hoox-shared/types";
 import { trackAnalytics } from "@jango-blockchained/hoox-shared/analytics";
 import type { AnalyticsEnv } from "@jango-blockchained/hoox-shared/analytics";
 import { healthCheck } from "@jango-blockchained/hoox-shared/health";
 import { serviceFetch } from "@jango-blockchained/hoox-shared/service-bindings";
 import { createRouter } from "@jango-blockchained/hoox-shared/router";
-import type { Handler } from "@jango-blockchained/hoox-shared/types/router";
 
 export interface Env extends Cloudflare.Env, AnalyticsEnv {
   [key: string]: unknown;
@@ -162,7 +158,7 @@ router.get(
   "/health",
   async (
     _request: Request,
-    env: Env,
+    _env: Env,
     _ctx: ExecutionContext
   ): Promise<Response> => {
     return healthCheck({ worker: "web3-wallet-worker" });
