@@ -44,7 +44,7 @@ async function sendNotification(
       logger.info("Calling TELEGRAM_SERVICE binding for notification");
       const notificationResponse = await serviceFetch(
         env.TELEGRAM_SERVICE,
-        "/webhook",
+        "/alert",
         { message: notificationMessage }
       );
 
