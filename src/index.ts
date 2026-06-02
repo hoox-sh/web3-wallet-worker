@@ -16,8 +16,9 @@ import type { AnalyticsEnv } from "@jango-blockchained/hoox-shared/analytics";
 import { healthCheck } from "@jango-blockchained/hoox-shared/health";
 import { serviceFetch } from "@jango-blockchained/hoox-shared/service-bindings";
 import { createRouter } from "@jango-blockchained/hoox-shared/router";
+import type { InternalAuthEnv } from "@jango-blockchained/hoox-shared/middleware";
 
-export interface Env extends Cloudflare.Env, AnalyticsEnv {
+export interface Env extends Cloudflare.Env, AnalyticsEnv, InternalAuthEnv {
   INTERNAL_KEY_BINDING?: string;
 }
 
