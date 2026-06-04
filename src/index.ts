@@ -1,5 +1,32 @@
+// workers/web3-wallet-worker/src/index.ts
+
 import { ethers } from "ethers";
-// ExecutionContext and Fetcher are globally declared by worker-configuration.d.ts
+import { getConfig, updateConfig } from "./config";
+import { getReadOnlyProvider, getWallet, connectWallet } from "./providers";
+import {
+  getNativeBalance,
+  getTokenBalance,
+  getTokenInfo,
+  formatBalance,
+  approveToken,
+  transferToken,
+} from "./tokens";
+import { getQuote, executeSwap, checkAllowanceAndApprove } from "./dex";
+import {
+  initTransactionsTable,
+  storeTransaction,
+  getTransaction,
+  listTransactions,
+  updateTxStatus,
+} from "./transactions";
+import { validateTransaction } from "./security";
+import type {
+  ChainName,
+  WalletConfig,
+  TransactionRecord,
+  SwapRequest,
+} from "./types";
+import { DEFAULT_CHAIN_CONFIGS } from "./constants";
 
 import {
   createJsonResponse,
@@ -17,56 +44,106 @@ import { healthCheck } from "@jango-blockchained/hoox-shared/health";
 import { serviceFetch } from "@jango-blockchained/hoox-shared/service-bindings";
 import { createRouter } from "@jango-blockchained/hoox-shared/router";
 import type { InternalAuthEnv } from "@jango-blockchained/hoox-shared/middleware";
+import type { KVNamespace, D1Database } from "@cloudflare/workers-types";
 
 export interface Env extends Cloudflare.Env, AnalyticsEnv, InternalAuthEnv {
   INTERNAL_KEY_BINDING?: string;
+  WALLET_CONFIG_KV: KVNamespace;
+  TRANSACTIONS_DB: D1Database;
 }
 
 const router = createRouter<Env>();
 const requireAuth = createInternalAuthMiddleware();
 const logger = createLogger({ service: "web3-wallet-worker" });
 
-/**
- * Sends a wallet initialization notification via the TELEGRAM_SERVICE binding.
- * Designed to be used with ctx.waitUntil() for fire-and-forget execution.
- */
-async function sendNotification(
-  wallet: ethers.HDNodeWallet | ethers.Wallet,
+// ── Helpers ──
+
+async function parseBody<T>(request: Request): Promise<T | null> {
+  try {
+    return (await request.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function createWalletFromEnv(
   env: Env
+): { wallet: ethers.Wallet; source: string } | Response {
+  const privateKey = env.WALLET_PK_SECRET;
+  const mnemonic = env.WALLET_MNEMONIC_SECRET;
+
+  if (privateKey) {
+    if (!/^(0x)?[0-9a-fA-F]{64}$/.test(privateKey)) {
+      return Errors.badRequest("Configured private key secret is invalid.");
+    }
+    const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
+    return { wallet: new ethers.Wallet(key), source: "private_key" };
+  }
+
+  if (mnemonic) {
+    if (mnemonic.split(" ").length < 12) {
+      return Errors.badRequest("Configured mnemonic phrase secret is invalid.");
+    }
+    return {
+      wallet: ethers.Wallet.fromPhrase(mnemonic) as unknown as ethers.Wallet,
+      source: "mnemonic",
+    };
+  }
+
+  return Errors.internal(
+    "Required wallet secret binding not configured or accessible."
+  );
+}
+
+function trackApiCall(
+  env: Env,
+  ctx: ExecutionContext,
+  route: string,
+  status: number
+) {
+  ctx.waitUntil(
+    trackAnalytics(env, "/track/api-call", {
+      worker: "web3-wallet-worker",
+      endpoint: route,
+      latencyMs: 0,
+      success: status < 500,
+    })
+  );
+}
+
+async function sendNotification(
+  wallet: ethers.Wallet,
+  env: Env,
+  message: string
 ): Promise<void> {
   try {
-    const notificationMessage = `Web3 Wallet Worker initialized successfully. Address: ${wallet.address}`;
-
     if (!env.TELEGRAM_SERVICE) {
       logger.warn(
         "TELEGRAM_SERVICE binding not configured, skipping notification"
       );
-    } else {
-      logger.info("Calling TELEGRAM_SERVICE binding for notification");
-      const notificationResponse = await serviceFetch(
-        env.TELEGRAM_SERVICE,
-        "/alert",
-        { message: notificationMessage }
-      );
-
-      if (!notificationResponse.ok) {
-        const errorText = await notificationResponse.text();
-        logger.error("Error calling TELEGRAM_SERVICE for notification", {
-          status: notificationResponse.status,
-          responseText: errorText,
-        });
-      } else {
-        logger.info("Notification sent via TELEGRAM_SERVICE binding");
-      }
+      return;
     }
-  } catch (notificationError: unknown) {
-    const errorMsg = toError(notificationError, "Unknown notification error");
-    logger.error("Exception calling TELEGRAM_SERVICE for notification", {
-      errorMsg,
-      notificationError,
+    logger.info("Calling TELEGRAM_SERVICE binding for notification");
+    const resp = await serviceFetch(env.TELEGRAM_SERVICE, "/alert", {
+      message,
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      logger.error("Error from TELEGRAM_SERVICE", {
+        status: resp.status,
+        text,
+      });
+    } else {
+      logger.info("Notification sent via TELEGRAM_SERVICE binding");
+    }
+  } catch (err: unknown) {
+    logger.error("Exception calling TELEGRAM_SERVICE", {
+      error: toError(err, "Unknown"),
     });
   }
 }
+
+// ── Route: GET / — Wallet init ──
 
 router.get(
   "/",
@@ -80,52 +157,12 @@ router.get(
       url: request.url,
     });
 
-    // Allow wallet to be either HDNodeWallet (fromPhrase) or Wallet (from private key)
-    let wallet: ethers.HDNodeWallet | ethers.Wallet;
-
     try {
-      // Attempt to get secrets from Secrets Store bindings
-      const privateKey = env.WALLET_PK_SECRET;
-      const mnemonic = env.WALLET_MNEMONIC_SECRET;
-
-      if (privateKey) {
-        // Prioritize Private Key if retrieved
-        logger.info("Using WALLET_PK_SECRET from Secrets Store");
-        // Basic validation for private key
-        if (!/^0x?[0-9a-fA-F]{64}$/.test(privateKey)) {
-          logger.error("Retrieved WALLET_PK_SECRET secret has invalid format");
-          return Errors.badRequest("Configured private key secret is invalid.");
-        }
-        wallet = new ethers.Wallet(
-          privateKey.startsWith("0x") ? privateKey : "0x" + privateKey
-        );
-      } else if (mnemonic) {
-        // Use Mnemonic Phrase if retrieved and no private key was found
-        logger.info("Using WALLET_MNEMONIC_SECRET from Secrets Store");
-        // Basic validation - check if it looks like a mnemonic
-        if (mnemonic.split(" ").length < 12) {
-          logger.error(
-            "Retrieved WALLET_MNEMONIC_SECRET secret has invalid format"
-          );
-          return Errors.badRequest(
-            "Configured mnemonic phrase secret is invalid."
-          );
-        }
-        wallet = ethers.Wallet.fromPhrase(mnemonic);
-      } else {
-        // Neither secret could be retrieved
-        logger.error(
-          "Could not retrieve WALLET_PK_SECRET or WALLET_MNEMONIC_SECRET from bindings"
-        );
-        return Errors.internal(
-          "Required wallet secret binding not configured or accessible."
-        );
-      }
-
-      // Wallet created successfully
+      const walletResult = createWalletFromEnv(env);
+      if (walletResult instanceof Response) return walletResult;
+      const { wallet, source } = walletResult;
       logger.info("Wallet address resolved", { address: wallet.address });
 
-      // Track wallet operation analytics (non-blocking)
       ctx.waitUntil(
         trackAnalytics(env, "/track/api-call", {
           worker: "web3-wallet-worker",
@@ -134,15 +171,19 @@ router.get(
           success: true,
         })
       );
+      ctx.waitUntil(
+        sendNotification(
+          wallet,
+          env,
+          `Web3 Wallet Worker initialized. Address: ${wallet.address} (${source})`
+        )
+      );
 
-      // Send wallet initialization notification via TELEGRAM_SERVICE (non-blocking)
-      ctx.waitUntil(sendNotification(wallet, env));
-
-      // Return success response
       return createJsonResponse(
         {
           message: "Worker initialized successfully using Secrets Store.",
           walletAddress: wallet.address,
+          source,
         },
         200
       );
@@ -154,16 +195,445 @@ router.get(
   [requireAuth]
 );
 
+// ── Route: GET /health — Health check ──
+
+router.get("/health", async (): Promise<Response> => {
+  return healthCheck({ worker: "web3-wallet-worker" });
+});
+
+// ── Route: GET /status — Wallet status ──
+
 router.get(
-  "/health",
+  "/status",
   async (
     _request: Request,
-    _env: Env,
+    env: Env,
     _ctx: ExecutionContext
   ): Promise<Response> => {
-    return healthCheck({ worker: "web3-wallet-worker" });
-  }
+    try {
+      const walletResult = createWalletFromEnv(env);
+      if (walletResult instanceof Response) return walletResult;
+      const { wallet, source } = walletResult;
+      const config = await getConfig(env.WALLET_CONFIG_KV);
+
+      return createJsonResponse(
+        {
+          address: wallet.address,
+          source,
+          enabled: config.enabled,
+          defaultChain: config.defaultChain,
+          availableChains: Object.entries(DEFAULT_CHAIN_CONFIGS)
+            .filter(([_, c]) => c.enabled)
+            .map(([name, c]) => ({
+              name,
+              chainId: c.chainId,
+              currency: c.currency,
+            })),
+          security: {
+            maxTransactionValueUsd: config.security.maxTransactionValueUsd,
+            whitelistedContractsOnly: config.security.whitelistedContractsOnly,
+          },
+          updatedAt: config.updatedAt,
+        },
+        200
+      );
+    } catch (error: unknown) {
+      logger.error("Error in /status", { error });
+      return Errors.internal(error);
+    }
+  },
+  [requireAuth]
 );
+
+// ── Route: GET /config — Read config ──
+
+router.get(
+  "/config",
+  async (
+    _request: Request,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<Response> => {
+    try {
+      const config = await getConfig(env.WALLET_CONFIG_KV);
+      return createJsonResponse(config, 200);
+    } catch (error: unknown) {
+      logger.error("Error in GET /config", { error });
+      return Errors.internal(error);
+    }
+  },
+  [requireAuth]
+);
+
+// ── Route: PUT /config — Update config ──
+
+router.put(
+  "/config",
+  async (
+    request: Request,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<Response> => {
+    try {
+      const body = await parseBody<Partial<WalletConfig>>(request);
+      if (!body) return Errors.badRequest("Invalid JSON body");
+
+      const current = await getConfig(env.WALLET_CONFIG_KV);
+      const merged: WalletConfig = { ...current, ...body };
+      await updateConfig(env.WALLET_CONFIG_KV, merged);
+
+      return createJsonResponse(
+        { message: "Configuration updated", config: merged },
+        200
+      );
+    } catch (error: unknown) {
+      logger.error("Error in PUT /config", { error });
+      return Errors.internal(error);
+    }
+  },
+  [requireAuth]
+);
+
+// ── Route: GET /balance — Native or token balance ──
+
+router.get(
+  "/balance",
+  async (
+    request: Request,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<Response> => {
+    try {
+      const url = new URL(request.url);
+      const chain = url.searchParams.get("chain") as ChainName | null;
+      const tokenAddress = url.searchParams.get("token");
+      const address = url.searchParams.get("address");
+
+      if (!chain) return Errors.badRequest("Missing required param: chain");
+      if (!address) return Errors.badRequest("Missing required param: address");
+      if (!DEFAULT_CHAIN_CONFIGS[chain]) {
+        return Errors.badRequest(`Unsupported chain: ${chain}`);
+      }
+
+      const provider = getReadOnlyProvider(chain);
+
+      if (tokenAddress) {
+        const tokenInfo = await getTokenInfo(provider, tokenAddress);
+        tokenInfo.chain = chain;
+        const balance = await getTokenBalance(provider, tokenAddress, address);
+        const result = formatBalance(chain, tokenInfo, balance);
+        return createJsonResponse(result, 200);
+      }
+
+      const rawBalance = await getNativeBalance(provider, address);
+      const nativeToken = {
+        address: ethers.ZeroAddress,
+        chain,
+        symbol: DEFAULT_CHAIN_CONFIGS[chain].currency,
+        name: DEFAULT_CHAIN_CONFIGS[chain].currency,
+        decimals: 18,
+      };
+      const result = formatBalance(chain, nativeToken, rawBalance);
+      return createJsonResponse(result, 200);
+    } catch (error: unknown) {
+      logger.error("Error in GET /balance", { error });
+      return Errors.internal(error);
+    }
+  },
+  [requireAuth]
+);
+
+// ── Route: POST /transfer — Transfer tokens ──
+
+router.post(
+  "/transfer",
+  async (
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<Response> => {
+    try {
+      const body = await parseBody<{
+        chain: ChainName;
+        tokenAddress: string;
+        to: string;
+        amount: string;
+      }>(request);
+      if (!body) return Errors.badRequest("Invalid JSON body");
+      if (!body.chain || !body.tokenAddress || !body.to || !body.amount) {
+        return Errors.badRequest(
+          "Missing required fields: chain, tokenAddress, to, amount"
+        );
+      }
+
+      const walletResult = createWalletFromEnv(env);
+      if (walletResult instanceof Response) return walletResult;
+      const baseWallet = walletResult.wallet;
+      const wallet = connectWallet(baseWallet, body.chain);
+      const amount = BigInt(body.amount);
+      const config = await getConfig(env.WALLET_CONFIG_KV);
+
+      const validation = await validateTransaction({
+        config,
+        to: body.tokenAddress,
+        valueUsd: 0,
+        chain: body.chain,
+      });
+      if (!validation.allowed) {
+        return Errors.forbidden(validation.reason || "Transaction not allowed");
+      }
+
+      const txHash = await transferToken(
+        wallet,
+        body.tokenAddress,
+        body.to,
+        amount
+      );
+
+      const record: TransactionRecord = {
+        id: crypto.randomUUID(),
+        chain: body.chain,
+        txHash,
+        type: "transfer",
+        status: "pending",
+        from: wallet.address,
+        to: body.to,
+        value: body.amount,
+        tokenAddress: body.tokenAddress,
+        createdAt: Date.now(),
+      };
+      await storeTransaction(env.TRANSACTIONS_DB, record);
+
+      trackApiCall(env, ctx, "/transfer", 200);
+      return createJsonResponse({ txHash, id: record.id }, 200);
+    } catch (error: unknown) {
+      logger.error("Error in POST /transfer", { error });
+      return Errors.internal(error);
+    }
+  },
+  [requireAuth]
+);
+
+// ── Route: POST /approve — Approve token spending ──
+
+router.post(
+  "/approve",
+  async (
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<Response> => {
+    try {
+      const body = await parseBody<{
+        chain: ChainName;
+        tokenAddress: string;
+        spender: string;
+        amount: string;
+      }>(request);
+      if (!body) return Errors.badRequest("Invalid JSON body");
+      if (!body.chain || !body.tokenAddress || !body.spender || !body.amount) {
+        return Errors.badRequest(
+          "Missing required fields: chain, tokenAddress, spender, amount"
+        );
+      }
+
+      const walletResult = createWalletFromEnv(env);
+      if (walletResult instanceof Response) return walletResult;
+      const baseWallet = walletResult.wallet;
+      const wallet = connectWallet(baseWallet, body.chain);
+      const amount = BigInt(body.amount);
+      const txHash = await approveToken(
+        wallet,
+        body.tokenAddress,
+        body.spender,
+        amount
+      );
+
+      const record: TransactionRecord = {
+        id: crypto.randomUUID(),
+        chain: body.chain,
+        txHash,
+        type: "approve",
+        status: "pending",
+        from: wallet.address,
+        to: body.spender,
+        value: "0",
+        tokenAddress: body.tokenAddress,
+        createdAt: Date.now(),
+      };
+      await storeTransaction(env.TRANSACTIONS_DB, record);
+
+      trackApiCall(env, ctx, "/approve", 200);
+      return createJsonResponse({ txHash, id: record.id }, 200);
+    } catch (error: unknown) {
+      logger.error("Error in POST /approve", { error });
+      return Errors.internal(error);
+    }
+  },
+  [requireAuth]
+);
+
+// ── Route: GET /quote — DEX swap quote ──
+
+router.get(
+  "/quote",
+  async (
+    request: Request,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<Response> => {
+    try {
+      const url = new URL(request.url);
+      const chain = url.searchParams.get("chain") as ChainName | null;
+      const tokenIn = url.searchParams.get("tokenIn");
+      const tokenOut = url.searchParams.get("tokenOut");
+      const amountIn = url.searchParams.get("amountIn");
+
+      if (!chain || !tokenIn || !tokenOut || !amountIn) {
+        return Errors.badRequest(
+          "Missing required params: chain, tokenIn, tokenOut, amountIn"
+        );
+      }
+      if (!DEFAULT_CHAIN_CONFIGS[chain]) {
+        return Errors.badRequest(`Unsupported chain: ${chain}`);
+      }
+
+      const provider = getReadOnlyProvider(chain);
+      const quote = await getQuote(
+        provider,
+        chain,
+        tokenIn,
+        tokenOut,
+        BigInt(amountIn)
+      );
+
+      const tokenInfo = await getTokenInfo(provider, tokenOut);
+      const formatted = formatBalance(chain, tokenInfo, quote);
+
+      return createJsonResponse(
+        {
+          amountIn,
+          amountOut: quote.toString(),
+          amountOutFormatted: formatted.balanceFormatted,
+          tokenOut,
+          chain,
+        },
+        200
+      );
+    } catch (error: unknown) {
+      logger.error("Error in GET /quote", { error });
+      return Errors.internal(error);
+    }
+  },
+  [requireAuth]
+);
+
+// ── Route: POST /swap — Execute DEX swap ──
+
+router.post(
+  "/swap",
+  async (
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<Response> => {
+    try {
+      const body = await parseBody<SwapRequest>(request);
+      if (!body) return Errors.badRequest("Invalid JSON body");
+      if (!body.chain || !body.tokenIn || !body.tokenOut || !body.amountIn) {
+        return Errors.badRequest(
+          "Missing required fields: chain, tokenIn, tokenOut, amountIn"
+        );
+      }
+
+      const walletResult = createWalletFromEnv(env);
+      if (walletResult instanceof Response) return walletResult;
+      const baseWallet = walletResult.wallet;
+      const wallet = connectWallet(baseWallet, body.chain);
+      const config = await getConfig(env.WALLET_CONFIG_KV);
+
+      const chainConfig = DEFAULT_CHAIN_CONFIGS[body.chain];
+      const routerAddr = chainConfig?.dexRouterAddress;
+      if (!routerAddr) {
+        return Errors.badRequest(
+          `No DEX router configured for chain: ${body.chain}`
+        );
+      }
+
+      const txHash = await executeSwap(wallet, body.chain, body, config);
+
+      const record: TransactionRecord = {
+        id: crypto.randomUUID(),
+        chain: body.chain,
+        txHash,
+        type: "swap",
+        status: "pending",
+        from: wallet.address,
+        to: routerAddr,
+        value: body.amountIn,
+        tokenAddress:
+          body.tokenIn === ethers.ZeroAddress ? undefined : body.tokenIn,
+        createdAt: Date.now(),
+      };
+      await storeTransaction(env.TRANSACTIONS_DB, record);
+
+      ctx.waitUntil(
+        sendNotification(
+          wallet,
+          env,
+          `Swap executed: ${body.amountIn} → ${txHash.slice(0, 10)}...`
+        )
+      );
+
+      trackApiCall(env, ctx, "/swap", 200);
+      return createJsonResponse({ txHash, id: record.id }, 200);
+    } catch (error: unknown) {
+      logger.error("Error in POST /swap", { error });
+      return Errors.internal(error);
+    }
+  },
+  [requireAuth]
+);
+
+// ── Route: GET /transactions — List transactions ──
+
+router.get(
+  "/transactions",
+  async (
+    request: Request,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<Response> => {
+    try {
+      const url = new URL(request.url);
+      const chain = url.searchParams.get("chain") ?? undefined;
+      const type = url.searchParams.get("type") ?? undefined;
+      const status = url.searchParams.get("status") ?? undefined;
+      const limit = url.searchParams.get("limit")
+        ? parseInt(url.searchParams.get("limit")!, 10)
+        : 50;
+      const offset = url.searchParams.get("offset")
+        ? parseInt(url.searchParams.get("offset")!, 10)
+        : 0;
+
+      const txs = await listTransactions(env.TRANSACTIONS_DB, {
+        chain,
+        type,
+        status,
+        limit,
+        offset,
+      });
+
+      return createJsonResponse({ transactions: txs, count: txs.length }, 200);
+    } catch (error: unknown) {
+      logger.error("Error in GET /transactions", { error });
+      return Errors.internal(error);
+    }
+  },
+  [requireAuth]
+);
+
+// ── Export ──
 
 export default {
   fetch: withRequestLog(

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "bun:test";
-import worker from "../src/index"; // Adjust the path as necessary
 import type { Env } from "../src/index";
+import worker from "../src/index";
 
 // Mock Request and ExecutionContext
 const mockRequest = (url = "http://localhost", method = "GET"): Request =>
@@ -53,6 +53,25 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
             new Response(JSON.stringify({ success: true }), { status: 200 })
           ),
         connect: vi.fn(),
+      },
+      WALLET_CONFIG_KV: {
+        get: vi.fn().mockResolvedValue(null),
+        put: vi.fn(),
+        delete: vi.fn(),
+        list: vi.fn().mockResolvedValue({ keys: [] }),
+        getWithMetadata: vi.fn(),
+      },
+      TRANSACTIONS_DB: {
+        prepare: vi.fn().mockReturnValue({
+          bind: vi.fn().mockReturnValue({
+            run: vi.fn().mockResolvedValue({ success: true }),
+            first: vi.fn().mockResolvedValue(null),
+            all: vi.fn().mockResolvedValue({ results: [] }),
+          }),
+          run: vi.fn().mockResolvedValue({ success: true }),
+          first: vi.fn().mockResolvedValue(null),
+          all: vi.fn().mockResolvedValue({ results: [] }),
+        }),
       },
     };
   };
@@ -138,6 +157,144 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     expect(res.status).toBe(400);
     const text = await res.text();
     expect(text).toContain("Configured mnemonic phrase secret is invalid.");
+  });
+
+  // ── GET /config ──
+
+  it("GET /config returns config when authenticated", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/config", {
+      headers: { "X-Internal-Auth-Key": "test-internal-key" },
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(200);
+    const json: any = await res.json();
+    expect(json.enabled).toBe(true);
+    expect(json.defaultChain).toBe("ethereum");
+    expect(json.dex).toBeDefined();
+    expect(json.security).toBeDefined();
+    expect(json.updatedAt).toBeGreaterThan(0);
+  });
+
+  it("GET /config returns 401 without auth header", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/config", { method: "GET" });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(401);
+    const json: any = await res.json();
+    expect(json.success).toBe(false);
+    expect(json.error).toBe("Unauthorized");
+  });
+
+  // ── PUT /config ──
+
+  it("PUT /config updates config and returns it", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/config", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+      },
+      body: JSON.stringify({ enabled: false, defaultChain: "polygon" }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(200);
+    const json: any = await res.json();
+    expect(json.message).toBe("Configuration updated");
+    expect(json.config.enabled).toBe(false);
+    expect(json.config.defaultChain).toBe("polygon");
+  });
+
+  // ── POST /transfer ──
+
+  it("POST /transfer rejects with missing required fields", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/transfer", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+      },
+      body: JSON.stringify({ chain: "ethereum" }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(400);
+    const json: any = await res.json();
+    expect(json.success).toBe(false);
+    expect(json.error).toContain("Missing required fields");
+  });
+
+  // ── POST /approve ──
+
+  it("POST /approve rejects with missing required fields", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/approve", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+      },
+      body: JSON.stringify({ chain: "ethereum" }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(400);
+    const json: any = await res.json();
+    expect(json.success).toBe(false);
+    expect(json.error).toContain("Missing required fields");
+  });
+
+  // ── POST /swap ──
+
+  it("POST /swap rejects missing required fields", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/swap", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+      },
+      body: JSON.stringify({ chain: "ethereum" }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(400);
+    const json: any = await res.json();
+    expect(json.success).toBe(false);
+    expect(json.error).toContain("Missing required fields");
+  });
+
+  // ── GET /transactions ──
+
+  it("GET /transactions returns list", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/transactions", {
+      headers: { "X-Internal-Auth-Key": "test-internal-key" },
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(200);
+    const json: any = await res.json();
+    expect(Array.isArray(json.transactions)).toBe(true);
+    expect(json.count).toBe(0);
+  });
+
+  // ── GET /status ──
+
+  it("GET /status returns wallet status", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/status", {
+      headers: { "X-Internal-Auth-Key": "test-internal-key" },
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(200);
+    const json: any = await res.json();
+    expect(json.address).toBe(EXPECTED_ADDRESS_FROM_PK);
+    expect(json.source).toBe("private_key");
+    expect(json.enabled).toBe(true);
+    expect(json.defaultChain).toBe("ethereum");
+    expect(Array.isArray(json.availableChains)).toBe(true);
+    expect(json.security).toBeDefined();
+    expect(json.security.maxTransactionValueUsd).toBe(10000);
+    expect(json.updatedAt).toBeGreaterThan(0);
   });
 });
 
