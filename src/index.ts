@@ -1,8 +1,10 @@
 // workers/web3-wallet-worker/src/index.ts
+// ethers v6 works with nodejs_compat flag (enabled in wrangler.jsonc).
+// nodejs_compat provides Node.js crypto polyfills that ethers v6 requires.
 
 import { ethers } from "ethers";
 import { getConfig, updateConfig } from "./config";
-import { getReadOnlyProvider, getWallet, connectWallet } from "./providers";
+import { getReadOnlyProvider, connectWallet } from "./providers";
 import {
   getNativeBalance,
   getTokenBalance,
@@ -12,13 +14,7 @@ import {
   transferToken,
 } from "./tokens";
 import { getQuote, executeSwap, checkAllowanceAndApprove } from "./dex";
-import {
-  initTransactionsTable,
-  storeTransaction,
-  getTransaction,
-  listTransactions,
-  updateTxStatus,
-} from "./transactions";
+import { storeTransaction, listTransactions } from "./transactions";
 import { validateTransaction } from "./security";
 import type {
   ChainName,
@@ -58,6 +54,13 @@ const logger = createLogger({ service: "web3-wallet-worker" });
 
 // ── Helpers ──
 
+/**
+ * Validate an Ethereum address format: must start with 0x, be 42 chars, valid hex.
+ */
+function isValidEthereumAddress(address: string): boolean {
+  return /^(0x)[0-9a-fA-F]{40}$/.test(address);
+}
+
 async function parseBody<T>(request: Request): Promise<T | null> {
   try {
     return (await request.json()) as T;
@@ -73,11 +76,10 @@ function createWalletFromEnv(
   const mnemonic = env.WALLET_MNEMONIC_SECRET;
 
   if (privateKey) {
-    if (!/^(0x)?[0-9a-fA-F]{64}$/.test(privateKey)) {
+    if (!/^(0x)[0-9a-fA-F]{64}$/.test(privateKey)) {
       return Errors.badRequest("Configured private key secret is invalid.");
     }
-    const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
-    return { wallet: new ethers.Wallet(key), source: "private_key" };
+    return { wallet: new ethers.Wallet(privateKey), source: "private_key" };
   }
 
   if (mnemonic) {
@@ -318,6 +320,9 @@ router.get(
       const provider = getReadOnlyProvider(chain);
 
       if (tokenAddress) {
+        if (!isValidEthereumAddress(tokenAddress)) {
+          return Errors.badRequest("Invalid token address format.");
+        }
         const tokenInfo = await getTokenInfo(provider, tokenAddress);
         tokenInfo.chain = chain;
         const balance = await getTokenBalance(provider, tokenAddress, address);
@@ -364,6 +369,9 @@ router.post(
         return Errors.badRequest(
           "Missing required fields: chain, tokenAddress, to, amount"
         );
+      }
+      if (!isValidEthereumAddress(body.tokenAddress)) {
+        return Errors.badRequest("Invalid token address format.");
       }
 
       const walletResult = createWalletFromEnv(env);
@@ -436,6 +444,9 @@ router.post(
           "Missing required fields: chain, tokenAddress, spender, amount"
         );
       }
+      if (!isValidEthereumAddress(body.tokenAddress)) {
+        return Errors.badRequest("Invalid token address format.");
+      }
 
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
@@ -497,6 +508,12 @@ router.get(
       if (!DEFAULT_CHAIN_CONFIGS[chain]) {
         return Errors.badRequest(`Unsupported chain: ${chain}`);
       }
+      if (
+        !isValidEthereumAddress(tokenIn) ||
+        !isValidEthereumAddress(tokenOut)
+      ) {
+        return Errors.badRequest("Invalid token address format.");
+      }
 
       const provider = getReadOnlyProvider(chain);
       const quote = await getQuote(
@@ -544,6 +561,12 @@ router.post(
         return Errors.badRequest(
           "Missing required fields: chain, tokenIn, tokenOut, amountIn"
         );
+      }
+      if (
+        !isValidEthereumAddress(body.tokenIn) ||
+        !isValidEthereumAddress(body.tokenOut)
+      ) {
+        return Errors.badRequest("Invalid token address format.");
       }
 
       const walletResult = createWalletFromEnv(env);
