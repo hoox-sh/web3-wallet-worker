@@ -1,10 +1,12 @@
-# Web3 Wallet Worker Environment Variables
-WALLET_PK_SECRET="{\"PRIVATE_KEY\": \"0xabcdef123456...your...test...key...here...7890\"}"
-WALLET_MNEMONIC_SECRET="{\"MNEMONIC_PHRASE\": \"word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12\"}"
+# Web3 Wallet Worker Environment Variables (local development)
+# Copy to .dev.vars and replace with actual values from `hoox setup` output.
+# .dev.vars is gitignored — never commit secrets.
 
-# Service URLs for local development
-TELEGRAM_SERVICE=http://localhost:8790
+# Internal auth key for service-to-service authentication
+INTERNAL_KEY_BINDING=your_internal_key_binding_here
 
-# Note: This file provides example values for local development.
-# Copy this file to .dev.vars and replace with your actual values.
-# .dev.vars is ignored by git to prevent committing sensitive information.
+# JSON-encoded wallet private key (for production, use wrangler secret put)
+# WALLET_PK_SECRET={"PRIVATE_KEY": "0xabcdef123456...7890"}
+
+# JSON-encoded wallet mnemonic phrase (for production, use wrangler secret put)
+# WALLET_MNEMONIC_SECRET={"MNEMONIC_PHRASE": "word1 word2 ... word12"}
