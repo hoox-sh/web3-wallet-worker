@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "description": "Cloudflare worker for Web3 wallet operations using ethers.js",
-  "license": "MIT",
+  "license": "CC-BY-4.0",
   "main": "src/index.ts",
   "type": "module",
   "scripts": {
@@ -23,5 +23,6 @@
   "dependencies": {
     "@jango-blockchained/hoox-shared": "workspace:*",
     "ethers": "^6.16.0"
-  }
+  },
+  "author": "jango-blockchained"
 }
