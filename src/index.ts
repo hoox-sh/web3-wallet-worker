@@ -3,6 +3,7 @@
 // nodejs_compat provides Node.js crypto polyfills that ethers v6 requires.
 
 import { ethers } from "ethers";
+import { z } from "zod/v4";
 import { getConfig, updateConfig } from "./config";
 import { getReadOnlyProvider, connectWallet } from "./providers";
 import {
@@ -69,6 +70,23 @@ async function parseBody<T>(request: Request): Promise<T | null> {
   }
 }
 
+/**
+ * Parse and validate request body against a Zod schema.
+ * Returns null on validation failure (caller should return 400).
+ */
+async function parseValidatedBody<T extends z.ZodTypeAny>(
+  request: Request,
+  schema: T
+): Promise<z.infer<T> | null> {
+  try {
+    const raw = await request.json();
+    const parsed = schema.safeParse(raw);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
 function createWalletFromEnv(
   env: Env
 ): { wallet: ethers.Wallet; source: string } | Response {
@@ -109,7 +127,9 @@ function trackApiCall(
       endpoint: route,
       latencyMs: 0,
       success: status < 500,
-    })
+    }).catch((err) =>
+      logger.error("trackAnalytics failed", { error: String(err) })
+    )
   );
 }
 
@@ -145,6 +165,70 @@ async function sendNotification(
   }
 }
 
+// ── Zod validation schemas (S-02 audit fix) ──
+const WalletConfigUpdateSchema = z
+  .object({
+    chainId: z.number().optional(),
+    rpcUrl: z.string().url().optional(),
+    maxGasPrice: z.string().optional(),
+  })
+  .passthrough();
+
+const SwapRequestSchema = z
+  .object({
+    chain: z.string().optional(),
+    tokenIn: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/)
+      .optional(),
+    tokenOut: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/)
+      .optional(),
+    amountIn: z.string().optional(),
+    amountOutMin: z.string().optional(),
+    slippage: z.number().min(0).max(50).optional(),
+    recipient: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/)
+      .optional(),
+    deadline: z.number().int().positive().optional(),
+  })
+  .passthrough();
+
+const TransactionRequestSchema = z.object({
+  to: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  value: z.string(),
+  data: z.string().optional(),
+  gasLimit: z.string().optional(),
+});
+
+const TransferTokenSchema = z.object({
+  chain: z.string().optional(),
+  tokenAddress: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional(),
+  to: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional(),
+  amount: z.string().optional(),
+});
+
+const ApproveTokenSchema = z.object({
+  chain: z.string().optional(),
+  tokenAddress: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional(),
+  spender: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional(),
+  amount: z.string().optional(),
+});
+
 // ── Route: GET / — Wallet init ──
 
 router.get(
@@ -171,13 +255,17 @@ router.get(
           endpoint: "/",
           latencyMs: 0,
           success: true,
-        })
+        }).catch((err) =>
+          logger.error("trackAnalytics failed", { error: String(err) })
+        )
       );
       ctx.waitUntil(
         sendNotification(
           wallet,
           env,
           `Web3 Wallet Worker initialized. Address: ${wallet.address} (${source})`
+        ).catch((err) =>
+          logger.error("sendNotification failed", { error: String(err) })
         )
       );
 
@@ -277,7 +365,7 @@ router.put(
     _ctx: ExecutionContext
   ): Promise<Response> => {
     try {
-      const body = await parseBody<Partial<WalletConfig>>(request);
+      const body = await parseValidatedBody(request, WalletConfigUpdateSchema);
       if (!body) return Errors.badRequest("Invalid JSON body");
 
       const current = await getConfig(env.WALLET_CONFIG_KV);
@@ -358,12 +446,7 @@ router.post(
     ctx: ExecutionContext
   ): Promise<Response> => {
     try {
-      const body = await parseBody<{
-        chain: ChainName;
-        tokenAddress: string;
-        to: string;
-        amount: string;
-      }>(request);
+      const body = await parseValidatedBody(request, TransferTokenSchema);
       if (!body) return Errors.badRequest("Invalid JSON body");
       if (!body.chain || !body.tokenAddress || !body.to || !body.amount) {
         return Errors.badRequest(
@@ -432,12 +515,7 @@ router.post(
     ctx: ExecutionContext
   ): Promise<Response> => {
     try {
-      const body = await parseBody<{
-        chain: ChainName;
-        tokenAddress: string;
-        spender: string;
-        amount: string;
-      }>(request);
+      const body = await parseValidatedBody(request, ApproveTokenSchema);
       if (!body) return Errors.badRequest("Invalid JSON body");
       if (!body.chain || !body.tokenAddress || !body.spender || !body.amount) {
         return Errors.badRequest(
@@ -555,9 +633,9 @@ router.post(
     ctx: ExecutionContext
   ): Promise<Response> => {
     try {
-      const body = await parseBody<SwapRequest>(request);
+      const body = await parseValidatedBody(request, SwapRequestSchema);
       if (!body) return Errors.badRequest("Invalid JSON body");
-      if (!body.chain || !body.tokenIn || !body.tokenOut || !body.amountIn) {
+      if (!body.tokenIn || !body.tokenOut || !body.amountIn) {
         return Errors.badRequest(
           "Missing required fields: chain, tokenIn, tokenOut, amountIn"
         );
@@ -605,6 +683,8 @@ router.post(
           wallet,
           env,
           `Swap executed: ${body.amountIn} → ${txHash.slice(0, 10)}...`
+        ).catch((err) =>
+          logger.error("sendNotification failed", { error: String(err) })
         )
       );
 
