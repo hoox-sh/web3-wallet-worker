@@ -121,7 +121,7 @@ export async function executeSwap(
     }
   }
 
-  const receipt = await tx.wait({ timeout: 120_000 });
+  const receipt = await tx.wait();
   return receipt?.hash ?? tx.hash;
 }
 
@@ -161,7 +161,7 @@ export async function checkAllowanceAndApprove(
     wallet
   );
   const tx = await signerContract.approve(checksummedSpender, amount);
-  const receipt = await tx.wait({ timeout: 120_000 });
+  const receipt = await tx.wait();
   return receipt?.hash ?? tx.hash;
 }
 

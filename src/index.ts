@@ -184,27 +184,27 @@ const WalletConfigUpdateSchema = z
   })
   .passthrough();
 
-const SwapRequestSchema = z
-  .object({
-    chain: z.string().optional(),
-    tokenIn: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/)
-      .optional(),
-    tokenOut: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/)
-      .optional(),
-    amountIn: z.string().optional(),
-    amountOutMin: z.string().optional(),
-    slippage: z.number().min(0).max(50).optional(),
-    recipient: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/)
-      .optional(),
-    deadline: z.number().int().positive().optional(),
-  })
-  .passthrough();
+const SwapRequestSchema = z.object({
+  chain: z
+    .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism"])
+    .optional(),
+  tokenIn: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional(),
+  tokenOut: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional(),
+  amountIn: z.string().optional(),
+  amountOutMin: z.string().optional(),
+  slippage: z.number().min(0).max(50).optional(),
+  recipient: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional(),
+  deadline: z.number().int().positive().optional(),
+});
 
 const TransactionRequestSchema = z.object({
   to: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
@@ -214,7 +214,9 @@ const TransactionRequestSchema = z.object({
 });
 
 const TransferTokenSchema = z.object({
-  chain: z.string().optional(),
+  chain: z
+    .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism"])
+    .optional(),
   tokenAddress: z
     .string()
     .regex(/^0x[a-fA-F0-9]{40}$/)
@@ -227,7 +229,9 @@ const TransferTokenSchema = z.object({
 });
 
 const ApproveTokenSchema = z.object({
-  chain: z.string().optional(),
+  chain: z
+    .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism"])
+    .optional(),
   tokenAddress: z
     .string()
     .regex(/^0x[a-fA-F0-9]{40}$/)
@@ -539,7 +543,9 @@ router.post(
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
-      const wallet = connectWallet(baseWallet, body.chain);
+      // body.chain is validated non-undefined by guard above
+      const chain = body.chain!;
+      const wallet = connectWallet(baseWallet, chain);
       const amount = BigInt(body.amount);
       const txHash = await approveToken(
         wallet,
@@ -550,7 +556,7 @@ router.post(
 
       const record: TransactionRecord = {
         id: crypto.randomUUID(),
-        chain: body.chain,
+        chain,
         txHash,
         type: "approve",
         status: "pending",
@@ -645,7 +651,7 @@ router.post(
     try {
       const body = await parseValidatedBody(request, SwapRequestSchema);
       if (!body) return Errors.badRequest("Invalid JSON body");
-      if (!body.tokenIn || !body.tokenOut || !body.amountIn) {
+      if (!body.chain || !body.tokenIn || !body.tokenOut || !body.amountIn) {
         return Errors.badRequest(
           "Missing required fields: chain, tokenIn, tokenOut, amountIn"
         );
@@ -660,22 +666,29 @@ router.post(
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
-      const wallet = connectWallet(baseWallet, body.chain);
+      // body.chain is validated non-undefined by guard above
+      const chain = body.chain!;
+      const wallet = connectWallet(baseWallet, chain);
       const config = await getConfig(env.WALLET_CONFIG_KV);
 
-      const chainConfig = DEFAULT_CHAIN_CONFIGS[body.chain];
+      const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
       const routerAddr = chainConfig?.dexRouterAddress;
       if (!routerAddr) {
         return Errors.badRequest(
-          `No DEX router configured for chain: ${body.chain}`
+          `No DEX router configured for chain: ${chain}`
         );
       }
 
-      const txHash = await executeSwap(wallet, body.chain, body, config);
+      const txHash = await executeSwap(
+        wallet,
+        chain,
+        body as SwapRequest,
+        config
+      );
 
       const record: TransactionRecord = {
         id: crypto.randomUUID(),
-        chain: body.chain,
+        chain,
         txHash,
         type: "swap",
         status: "pending",
