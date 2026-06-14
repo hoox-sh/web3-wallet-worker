@@ -4,16 +4,27 @@ import { ethers } from "ethers";
 import type { ChainName } from "./types";
 import { getChainConfig } from "./config";
 
+/** Cache provider instances by RPC URL to avoid repeated DNS resolution */
+const providerCache = new Map<string, ethers.JsonRpcProvider>();
+
 /**
  * Get a read-only JsonRpcProvider for the given chain.
  * RPC URLs should be set in KV config per chain.
+ * Providers are cached per RPC URL to avoid repeated DNS resolution.
  */
 export function getReadOnlyProvider(chain: ChainName): ethers.JsonRpcProvider {
   const config = getChainConfig(chain);
   const rpcUrl = config.rpcUrl || "https://eth.llamarpc.com"; // fallback
-  return new ethers.JsonRpcProvider(rpcUrl, config.chainId, {
-    staticNetwork: true,
-  });
+  const cacheKey = `${rpcUrl}:${config.chainId}`;
+
+  let provider = providerCache.get(cacheKey);
+  if (!provider) {
+    provider = new ethers.JsonRpcProvider(rpcUrl, config.chainId, {
+      staticNetwork: true,
+    });
+    providerCache.set(cacheKey, provider);
+  }
+  return provider;
 }
 
 /**

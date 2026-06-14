@@ -55,6 +55,9 @@ const logger = createLogger({ service: "web3-wallet-worker" });
 
 // ── Helpers ──
 
+/** Cache wallet instances by secret to avoid repeated secp256k1 key derivation */
+const walletCache = new Map<string, ethers.Wallet>();
+
 /**
  * Validate an Ethereum address format: must start with 0x, be 42 chars, valid hex.
  */
@@ -97,17 +100,24 @@ function createWalletFromEnv(
     if (!/^(0x)[0-9a-fA-F]{64}$/.test(privateKey)) {
       return Errors.badRequest("Configured private key secret is invalid.");
     }
-    return { wallet: new ethers.Wallet(privateKey), source: "private_key" };
+    let wallet = walletCache.get(privateKey);
+    if (!wallet) {
+      wallet = new ethers.Wallet(privateKey);
+      walletCache.set(privateKey, wallet);
+    }
+    return { wallet, source: "private_key" };
   }
 
   if (mnemonic) {
     if (mnemonic.split(" ").length < 12) {
       return Errors.badRequest("Configured mnemonic phrase secret is invalid.");
     }
-    return {
-      wallet: ethers.Wallet.fromPhrase(mnemonic) as unknown as ethers.Wallet,
-      source: "mnemonic",
-    };
+    let wallet = walletCache.get(mnemonic);
+    if (!wallet) {
+      wallet = ethers.Wallet.fromPhrase(mnemonic) as unknown as ethers.Wallet;
+      walletCache.set(mnemonic, wallet);
+    }
+    return { wallet, source: "mnemonic" };
   }
 
   return Errors.internal(
