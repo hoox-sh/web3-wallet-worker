@@ -14,7 +14,7 @@ import {
   approveToken,
   transferToken,
 } from "./tokens";
-import { getQuote, executeSwap, checkAllowanceAndApprove } from "./dex";
+import { getQuote, executeSwap } from "./dex";
 import { storeTransaction, listTransactions } from "./transactions";
 import { validateTransaction } from "./security";
 import type {
@@ -63,14 +63,6 @@ const walletCache = new Map<string, ethers.Wallet>();
  */
 function isValidEthereumAddress(address: string): boolean {
   return /^(0x)[0-9a-fA-F]{40}$/.test(address);
-}
-
-async function parseBody<T>(request: Request): Promise<T | null> {
-  try {
-    return (await request.json()) as T;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -204,13 +196,6 @@ const SwapRequestSchema = z.object({
     .regex(/^0x[a-fA-F0-9]{40}$/)
     .optional(),
   deadline: z.number().int().positive().optional(),
-});
-
-const TransactionRequestSchema = z.object({
-  to: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-  value: z.string(),
-  data: z.string().optional(),
-  gasLimit: z.string().optional(),
 });
 
 const TransferTokenSchema = z.object({
