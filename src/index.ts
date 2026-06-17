@@ -389,7 +389,7 @@ router.get(
   "/balance",
   async (
     request: Request,
-    env: Env,
+    _env: Env,
     _ctx: ExecutionContext
   ): Promise<Response> => {
     try {
@@ -569,7 +569,7 @@ router.get(
   "/quote",
   async (
     request: Request,
-    env: Env,
+    _env: Env,
     _ctx: ExecutionContext
   ): Promise<Response> => {
     try {
