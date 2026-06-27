@@ -237,14 +237,48 @@ async function sendNotification(
   }
 }
 
-// ── Zod validation schemas (S-02 audit fix) ──
+// ── Zod validation schemas (S-02 audit fix + C-5 fix) ──
+//
+// C-5 fix (2026-06-27 worker audit): the previous schema was
+// `.passthrough()` and only accepted 3 chain-level fields, but the
+// route handler did a SHALLOW merge (`{ ...current, ...body }`). An
+// attacker could submit `{ security: { whitelistedContractsOnly:
+// false }, dex: { maxApprovalAmount: "999999999999" } }` and replace
+// the entire security/dex sub-objects with attacker-controlled
+// values. The fix:
+// 1. Use `.strict()` so unknown fields are rejected (typos, junk,
+//   injection).
+// 2. Cover the full WalletConfig shape with nested object schemas
+//   that mirror config.ts.
+// 3. The route handler does a DEEP merge of `dex` and `security`
+//   sub-objects (see PUT /config below).
+const DexConfigUpdateSchema = z
+  .object({
+    slippageTolerance: z.number().nonnegative().optional(),
+    gasMultiplier: z.number().positive().optional(),
+    maxApprovalAmount: z.string().optional(),
+  })
+  .strict();
+
+const SecurityConfigUpdateSchema = z
+  .object({
+    maxTransactionValueUsd: z.number().nonnegative().optional(),
+    requireConfirmation: z.boolean().optional(),
+    whitelistedContractsOnly: z.boolean().optional(),
+    whitelistedContracts: z.array(z.string()).optional(),
+  })
+  .strict();
+
 const WalletConfigUpdateSchema = z
   .object({
-    chainId: z.number().optional(),
-    rpcUrl: z.string().url().optional(),
-    maxGasPrice: z.string().optional(),
+    enabled: z.boolean().optional(),
+    defaultChain: z
+      .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism"])
+      .optional(),
+    dex: DexConfigUpdateSchema.optional(),
+    security: SecurityConfigUpdateSchema.optional(),
   })
-  .passthrough();
+  .strict();
 
 const SwapRequestSchema = z.object({
   chain: z
@@ -441,7 +475,22 @@ router.put(
 
       await ensureConfigMigrated(env);
       const current = await getConfig(env.CONFIG_KV);
-      const merged: WalletConfig = { ...current, ...body };
+
+      // Deep merge: shallow `{ ...current, ...body }` would replace
+      // the entire `security` and `dex` sub-objects with whatever
+      // the caller sent. Instead, merge each sub-object individually
+      // so partial updates (e.g. only flipping whitelistedContractsOnly)
+      // don't clobber unrelated fields. (C-5 from the 2026-06-27
+      // worker audit.)
+      const merged: WalletConfig = {
+        ...current,
+        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+        ...(body.defaultChain !== undefined
+          ? { defaultChain: body.defaultChain }
+          : {}),
+        dex: { ...current.dex, ...(body.dex ?? {}) },
+        security: { ...current.security, ...(body.security ?? {}) },
+      };
       await updateConfig(env.CONFIG_KV, merged);
 
       return createJsonResponse(
