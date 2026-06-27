@@ -74,6 +74,7 @@ export function createMockEnv(overrides: Partial<Env> = {}): Env {
     TELEGRAM_SERVICE: createMockFetcher(),
     ANALYTICS_SERVICE: createMockFetcher(),
     WALLET_CONFIG_KV: createMockKV(),
+    CONFIG_KV: createMockKV(),
     TRANSACTIONS_DB: createMockD1(),
     ...overrides,
   } as Env;
