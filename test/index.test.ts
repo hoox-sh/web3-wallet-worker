@@ -61,6 +61,13 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
         list: vi.fn().mockResolvedValue({ keys: [] }),
         getWithMetadata: vi.fn(),
       },
+      CONFIG_KV: {
+        get: vi.fn().mockResolvedValue(null),
+        put: vi.fn().mockResolvedValue(undefined),
+        delete: vi.fn(),
+        list: vi.fn().mockResolvedValue({ keys: [] }),
+        getWithMetadata: vi.fn(),
+      },
       TRANSACTIONS_DB: {
         prepare: vi.fn().mockReturnValue({
           bind: vi.fn().mockReturnValue({

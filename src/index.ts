@@ -23,7 +23,7 @@ import type {
   TransactionRecord,
   SwapRequest,
 } from "./types";
-import { DEFAULT_CHAIN_CONFIGS } from "./constants";
+import { DEFAULT_CHAIN_CONFIGS, KV_CONFIG_KEY } from "./constants";
 
 import {
   createJsonResponse,
@@ -43,15 +43,85 @@ import { createRouter } from "@jango-blockchained/hoox-shared/router";
 import type { InternalAuthEnv } from "@jango-blockchained/hoox-shared/middleware";
 import type { KVNamespace, D1Database } from "@cloudflare/workers-types";
 
-export interface Env extends Cloudflare.Env, AnalyticsEnv, InternalAuthEnv {
-  INTERNAL_KEY_BINDING?: string;
+export interface Env extends AnalyticsEnv, InternalAuthEnv {
+  // Worker bindings (declared in wrangler.jsonc, ids match shared CONFIG_KV
+  // and legacy WALLET_CONFIG_KV; see src/config.ts for migration logic).
+  CONFIG_KV: KVNamespace;
   WALLET_CONFIG_KV: KVNamespace;
   TRANSACTIONS_DB: D1Database;
+  // Wrangler secret bindings (created via `wrangler secret put`).
+  WALLET_PK_SECRET?: string;
+  WALLET_MNEMONIC_SECRET?: string;
+  // Service bindings (see wrangler.jsonc services block).
+  TELEGRAM_SERVICE: Fetcher;
+  ANALYTICS_SERVICE: Fetcher;
 }
 
 const router = createRouter<Env>();
 const requireAuth = createInternalAuthMiddleware();
 const logger = createLogger({ service: "web3-wallet-worker" });
+
+// ── Migration ──
+
+/**
+ * Sentinel key written to CONFIG_KV once the one-shot migration from the legacy
+ * WALLET_CONFIG_KV namespace has completed. Prevents re-running on every request.
+ */
+const MIGRATION_MARKER_KEY = "migrated:v1";
+
+/**
+ * In-flight migration guard. Workers may handle many requests concurrently;
+ * a module-scoped Promise ensures the migration runs at most once per isolate
+ * (subsequent callers await the same Promise).
+ */
+let migrationPromise: Promise<void> | null = null;
+
+/**
+ * One-shot copy from the legacy WALLET_CONFIG_KV namespace to the shared
+ * CONFIG_KV namespace. Runs only when CONFIG_KV is empty AND WALLET_CONFIG_KV
+ * has data. Idempotent: the `migrated:v1` marker in CONFIG_KV makes repeat
+ * calls a no-op.
+ *
+ * Failures are logged but do NOT throw — the route handlers must continue to
+ * work even if the legacy KV is unreachable (e.g. namespace already deleted).
+ */
+async function ensureConfigMigrated(env: Env): Promise<void> {
+  if (migrationPromise) return migrationPromise;
+
+  const run = async (): Promise<void> => {
+    try {
+      const [marker, existing, legacy] = await Promise.all([
+        env.CONFIG_KV.get(MIGRATION_MARKER_KEY),
+        env.CONFIG_KV.get(KV_CONFIG_KEY),
+        env.WALLET_CONFIG_KV.get(KV_CONFIG_KEY),
+      ]);
+
+      // Already migrated or destination already populated — nothing to do.
+      if (marker !== null) return;
+      if (existing !== null) {
+        // CONFIG_KV has data but no marker — write marker to prevent re-check.
+        await env.CONFIG_KV.put(MIGRATION_MARKER_KEY, new Date().toISOString());
+        return;
+      }
+      if (legacy === null) {
+        // No source data — still mark so we don't keep checking.
+        await env.CONFIG_KV.put(MIGRATION_MARKER_KEY, new Date().toISOString());
+        return;
+      }
+
+      await env.CONFIG_KV.put(KV_CONFIG_KEY, legacy);
+      await env.CONFIG_KV.put(MIGRATION_MARKER_KEY, new Date().toISOString());
+      logger.info("Migrated wallet config from WALLET_CONFIG_KV to CONFIG_KV");
+    } catch (err) {
+      logger.error("ensureConfigMigrated failed", {
+        error: toError(err, "Unknown"),
+      });
+    }
+  };
+
+  migrationPromise = run();
+  return migrationPromise;
+}
 
 // ── Helpers ──
 
@@ -303,7 +373,8 @@ router.get(
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
       const { wallet, source } = walletResult;
-      const config = await getConfig(env.WALLET_CONFIG_KV);
+      await ensureConfigMigrated(env);
+      const config = await getConfig(env.CONFIG_KV);
 
       return createJsonResponse(
         {
@@ -344,7 +415,8 @@ router.get(
     _ctx: ExecutionContext
   ): Promise<Response> => {
     try {
-      const config = await getConfig(env.WALLET_CONFIG_KV);
+      await ensureConfigMigrated(env);
+      const config = await getConfig(env.CONFIG_KV);
       return createJsonResponse(config, 200);
     } catch (error: unknown) {
       logger.error("Error in GET /config", { error });
@@ -367,9 +439,10 @@ router.put(
       const body = await parseValidatedBody(request, WalletConfigUpdateSchema);
       if (!body) return Errors.badRequest("Invalid JSON body");
 
-      const current = await getConfig(env.WALLET_CONFIG_KV);
+      await ensureConfigMigrated(env);
+      const current = await getConfig(env.CONFIG_KV);
       const merged: WalletConfig = { ...current, ...body };
-      await updateConfig(env.WALLET_CONFIG_KV, merged);
+      await updateConfig(env.CONFIG_KV, merged);
 
       return createJsonResponse(
         { message: "Configuration updated", config: merged },
@@ -459,9 +532,12 @@ router.post(
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
-      const wallet = connectWallet(baseWallet, body.chain);
+      // body.chain is validated non-undefined by guard above
+      const chain = body.chain!;
+      const wallet = connectWallet(baseWallet, chain);
       const amount = BigInt(body.amount);
-      const config = await getConfig(env.WALLET_CONFIG_KV);
+      await ensureConfigMigrated(env);
+      const config = await getConfig(env.CONFIG_KV);
 
       const validation = await validateTransaction({
         config,
@@ -654,7 +730,8 @@ router.post(
       // body.chain is validated non-undefined by guard above
       const chain = body.chain!;
       const wallet = connectWallet(baseWallet, chain);
-      const config = await getConfig(env.WALLET_CONFIG_KV);
+      await ensureConfigMigrated(env);
+      const config = await getConfig(env.CONFIG_KV);
 
       const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
       const routerAddr = chainConfig?.dexRouterAddress;
