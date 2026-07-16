@@ -158,7 +158,10 @@ export async function validateOutgoingTransfer(
     const isDexRouter =
       chainConfig?.dexRouterAddress?.toLowerCase() ===
       params.tokenAddress.toLowerCase();
-    if (!isDexRouter && !isContractWhitelisted(params.config, params.tokenAddress)) {
+    if (
+      !isDexRouter &&
+      !isContractWhitelisted(params.config, params.tokenAddress)
+    ) {
       return {
         allowed: false,
         reason: "Token contract not in whitelist",

@@ -227,9 +227,7 @@ export async function estimateTokenValueUsd(params: {
     try {
       const provider = getReadOnlyProvider(chain);
       const info = await getTokenInfo(provider, tokenAddress);
-      const amountHuman = Number(
-        ethers.formatUnits(amountRaw, info.decimals)
-      );
+      const amountHuman = Number(ethers.formatUnits(amountRaw, info.decimals));
       return {
         valueUsd: amountHuman,
         source: "stablecoin",

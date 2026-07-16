@@ -15,9 +15,8 @@ mock.module("../src/tokens", () => ({
   }),
 }));
 
-const { estimateTokenValueUsd, resolveEnforcedValueUsd } = await import(
-  "../src/pricing"
-);
+const { estimateTokenValueUsd, resolveEnforcedValueUsd } =
+  await import("../src/pricing");
 
 describe("pricing", () => {
   beforeEach(() => {

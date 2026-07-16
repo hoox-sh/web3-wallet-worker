@@ -69,7 +69,9 @@ export interface Env extends AnalyticsEnv, InternalAuthEnv {
 }
 
 const router = createRouter<Env>();
-const requireAuth = createInternalAuthMiddleware(WALLET_EXECUTE_AUTH_KEY_FIELDS);
+const requireAuth = createInternalAuthMiddleware(
+  WALLET_EXECUTE_AUTH_KEY_FIELDS
+);
 const logger = createLogger({ service: "web3-wallet-worker" });
 
 // ── Migration ──
