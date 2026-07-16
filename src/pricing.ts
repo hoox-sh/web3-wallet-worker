@@ -1,0 +1,184 @@
+// workers/web3-wallet-worker/src/pricing.ts
+// Server-side USD notional estimation — never trust client valueUsd alone.
+
+import { ethers } from "ethers";
+import type { ChainName } from "./types";
+import { DEFAULT_CHAIN_CONFIGS } from "./constants";
+import { getTokenInfo } from "./tokens";
+import { getReadOnlyProvider } from "./providers";
+
+/** Well-known USD stablecoins (1:1 for limit enforcement). */
+const STABLECOIN_ADDRESSES = new Set(
+  [
+    // USDT
+    "0xdac17f958d2ee523a2206206994597c13d831ec7", // eth
+    "0x55d398326f99059ff775485246999027b3197955", // bsc
+    "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // polygon
+    "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // arbitrum
+    // USDC
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // eth
+    "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", // bsc
+    "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", // polygon
+    "0xaf88d065e77c8cc2239327c5edb3a432268e5831", // arbitrum
+    // DAI
+    "0x6b175474e89094c44da98b954eedeac495271d0f",
+    "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3", // bsc dai
+  ].map((a) => a.toLowerCase())
+);
+
+const NATIVE_ZERO = "0x0000000000000000000000000000000000000000";
+
+/** Map chain native currency to a Binance USDT pair symbol. */
+const NATIVE_BINANCE_PAIR: Record<ChainName, string | null> = {
+  ethereum: "ETHUSDT",
+  bsc: "BNBUSDT",
+  polygon: "MATICUSDT",
+  arbitrum: "ETHUSDT",
+  optimism: "ETHUSDT",
+};
+
+/** In-memory price cache (per isolate) — short TTL to limit external calls. */
+const priceCache = new Map<string, { usd: number; expiresAt: number }>();
+const PRICE_CACHE_TTL_MS = 60_000;
+
+async function fetchBinancePriceUsd(pair: string): Promise<number | null> {
+  const cached = priceCache.get(pair);
+  if (cached && Date.now() < cached.expiresAt) return cached.usd;
+
+  try {
+    const res = await fetch(
+      `https://api.binance.com/api/v3/ticker/price?symbol=${pair}`,
+      { signal: AbortSignal.timeout(5_000) }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { price?: string };
+    const usd = data.price ? parseFloat(data.price) : NaN;
+    if (!Number.isFinite(usd) || usd <= 0) return null;
+    priceCache.set(pair, { usd, expiresAt: Date.now() + PRICE_CACHE_TTL_MS });
+    return usd;
+  } catch {
+    return null;
+  }
+}
+
+export interface ValueEstimate {
+  valueUsd: number;
+  source: "stablecoin" | "native-oracle" | "unavailable";
+  decimals: number;
+  amountHuman: number;
+}
+
+/**
+ * Estimate USD notional for a token amount using server-side data only.
+ *
+ * Priority:
+ * 1. Known USD stables → 1:1
+ * 2. Native currency (or wrapped native) → Binance public ticker
+ * 3. Otherwise unavailable (caller should fail closed)
+ *
+ * Client-supplied valueUsd is ignored.
+ */
+export async function estimateTokenValueUsd(params: {
+  chain: ChainName;
+  tokenAddress: string;
+  amountRaw: bigint;
+}): Promise<ValueEstimate> {
+  const { chain, tokenAddress, amountRaw } = params;
+  const addr = tokenAddress.toLowerCase();
+  const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
+  const wrapped = chainConfig?.wrappedNativeAddress?.toLowerCase();
+
+  // Native (zero address) or wrapped native
+  const isNative =
+    addr === NATIVE_ZERO || (wrapped !== undefined && addr === wrapped);
+
+  if (isNative) {
+    const pair = NATIVE_BINANCE_PAIR[chain];
+    const unitPrice = pair ? await fetchBinancePriceUsd(pair) : null;
+    const amountHuman = Number(ethers.formatEther(amountRaw));
+    if (unitPrice === null || !Number.isFinite(amountHuman)) {
+      return {
+        valueUsd: 0,
+        source: "unavailable",
+        decimals: 18,
+        amountHuman,
+      };
+    }
+    return {
+      valueUsd: amountHuman * unitPrice,
+      source: "native-oracle",
+      decimals: 18,
+      amountHuman,
+    };
+  }
+
+  // Stablecoins
+  if (STABLECOIN_ADDRESSES.has(addr)) {
+    try {
+      const provider = getReadOnlyProvider(chain);
+      const info = await getTokenInfo(provider, tokenAddress);
+      const amountHuman = Number(
+        ethers.formatUnits(amountRaw, info.decimals)
+      );
+      return {
+        valueUsd: amountHuman,
+        source: "stablecoin",
+        decimals: info.decimals,
+        amountHuman,
+      };
+    } catch {
+      // Fall through to unavailable
+    }
+  }
+
+  // Unknown ERC-20: try decimals for human amount but no price
+  try {
+    const provider = getReadOnlyProvider(chain);
+    const info = await getTokenInfo(provider, tokenAddress);
+    const amountHuman = Number(ethers.formatUnits(amountRaw, info.decimals));
+    return {
+      valueUsd: 0,
+      source: "unavailable",
+      decimals: info.decimals,
+      amountHuman,
+    };
+  } catch {
+    return {
+      valueUsd: 0,
+      source: "unavailable",
+      decimals: 18,
+      amountHuman: 0,
+    };
+  }
+}
+
+/**
+ * Resolve the USD notional used for policy checks.
+ * Fail closed when the server cannot price the asset (unless amount is 0).
+ */
+export async function resolveEnforcedValueUsd(params: {
+  chain: ChainName;
+  tokenAddress: string;
+  amountRaw: bigint;
+}): Promise<
+  | { ok: true; valueUsd: number; source: ValueEstimate["source"] }
+  | { ok: false; reason: string }
+> {
+  if (params.amountRaw === 0n) {
+    return { ok: true, valueUsd: 0, source: "stablecoin" };
+  }
+
+  const estimate = await estimateTokenValueUsd(params);
+  if (estimate.source === "unavailable" || !(estimate.valueUsd > 0)) {
+    return {
+      ok: false,
+      reason:
+        "Unable to price token server-side; only native assets and known USD stables are auto-priced. Whitelist-only transfers of unpriced tokens are blocked.",
+    };
+  }
+  return {
+    ok: true,
+    valueUsd: estimate.valueUsd,
+    source: estimate.source,
+  };
+}

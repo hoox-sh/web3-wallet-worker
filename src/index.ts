@@ -21,6 +21,7 @@ import {
   validateSwapTransaction,
   validateApproval,
 } from "./security";
+import { resolveEnforcedValueUsd } from "./pricing";
 import type {
   ChainName,
   WalletConfig,
@@ -612,20 +613,26 @@ router.post(
       await ensureConfigMigrated(env);
       const config = await getConfig(env.CONFIG_KV);
 
-      if (body.valueUsd === undefined || !(body.valueUsd > 0)) {
-        return Errors.badRequest(
-          "valueUsd is required and must be a positive number for limit enforcement"
-        );
-      }
       if (!isValidEthereumAddress(body.to)) {
         return Errors.badRequest("Invalid recipient address format.");
       }
+
+      // Server-side USD pricing — ignore client valueUsd for enforcement
+      const priced = await resolveEnforcedValueUsd({
+        chain,
+        tokenAddress: body.tokenAddress,
+        amountRaw: amount,
+      });
+      if (!priced.ok) {
+        return Errors.forbidden(priced.reason);
+      }
+      const valueUsd = priced.valueUsd;
 
       const validation = await validateOutgoingTransfer({
         config,
         to: body.to,
         tokenAddress: body.tokenAddress,
-        valueUsd: body.valueUsd,
+        valueUsd,
         chain: body.chain,
       });
       if (!validation.allowed) {
@@ -637,6 +644,7 @@ router.post(
               success: false,
               error: validation.reason,
               code: "CONFIRMATION_REQUIRED",
+              valueUsd,
             },
             409
           );
@@ -859,18 +867,29 @@ router.post(
         );
       }
 
-      if (body.valueUsd === undefined || !(body.valueUsd > 0)) {
-        return Errors.badRequest(
-          "valueUsd is required and must be a positive number for limit enforcement"
-        );
+      // Server-side USD pricing of the input amount (ignore client valueUsd)
+      let amountInRaw: bigint;
+      try {
+        amountInRaw = BigInt(body.amountIn);
+      } catch {
+        return Errors.badRequest("Invalid amountIn");
       }
+      const priced = await resolveEnforcedValueUsd({
+        chain,
+        tokenAddress: body.tokenIn,
+        amountRaw: amountInRaw,
+      });
+      if (!priced.ok) {
+        return Errors.forbidden(priced.reason);
+      }
+      const valueUsd = priced.valueUsd;
 
       const swapValidation = await validateSwapTransaction({
         config,
         to: routerAddr,
         tokenIn: body.tokenIn,
         tokenOut: body.tokenOut,
-        valueUsd: body.valueUsd,
+        valueUsd,
         chain: body.chain,
       });
       if (!swapValidation.allowed) {
@@ -880,6 +899,7 @@ router.post(
               success: false,
               error: swapValidation.reason,
               code: "CONFIRMATION_REQUIRED",
+              valueUsd,
             },
             409
           );
