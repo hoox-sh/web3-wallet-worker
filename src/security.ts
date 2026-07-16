@@ -43,11 +43,95 @@ export async function validateTransaction(
     }
   }
 
+  // Reject non-positive notional — a client cannot understate value to 0
+  // to bypass maxTransactionValueUsd. Server-side price oracles should
+  // eventually replace client-supplied valueUsd entirely (defense in depth).
+  if (!(valueUsd > 0) || !Number.isFinite(valueUsd)) {
+    return {
+      allowed: false,
+      reason: "valueUsd must be a positive finite number",
+    };
+  }
+
+  // Confirmation gate is FAIL-CLOSED: high-value txs require an explicit
+  // two-phase confirmation flow. Returning allowed:true here previously
+  // made requireConfirmation a no-op (handlers only check .allowed).
   if (config.security.requireConfirmation && valueUsd > 1000) {
     return {
-      allowed: true,
+      allowed: false,
       reason: "Confirmation required",
     };
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Validate an ERC-20 approve against security policy.
+ * Approvals are often more dangerous than single transfers (spender can drain).
+ */
+export async function validateApproval(
+  params: ValidationParams & {
+    tokenAddress: string;
+    spender: string;
+    amount: string;
+    maxApprovalAmount?: string;
+  }
+): Promise<ValidationResult> {
+  const { config, tokenAddress, spender, amount } = params;
+
+  if (!config.enabled) {
+    return { allowed: false, reason: "Wallet is disabled" };
+  }
+
+  // Spender must pass the same contract policy as any other destination
+  const spenderCheck = await validateTransaction({
+    config,
+    to: spender,
+    // Approvals don't move funds directly — use a nominal positive value so
+    // valueUsd positivity checks pass; amount caps handle size separately.
+    valueUsd: 1,
+    chain: params.chain,
+  });
+  if (!spenderCheck.allowed) {
+    // Rephrase for approve context when the issue is confirmation/value —
+    // whitelist/disabled messages already apply.
+    return spenderCheck;
+  }
+
+  if (config.security.whitelistedContractsOnly) {
+    if (!isContractWhitelisted(config, tokenAddress)) {
+      const chainConfig = DEFAULT_CHAIN_CONFIGS[params.chain];
+      const isDexRouter =
+        chainConfig?.dexRouterAddress?.toLowerCase() ===
+        tokenAddress.toLowerCase();
+      if (!isDexRouter) {
+        return {
+          allowed: false,
+          reason: "Token contract not in whitelist",
+        };
+      }
+    }
+  }
+
+  // Cap approve amount against configured maxApprovalAmount when provided
+  const maxApproval = params.maxApprovalAmount;
+  if (maxApproval) {
+    try {
+      const amountBn = BigInt(amount);
+      const maxBn = BigInt(maxApproval);
+      if (amountBn > maxBn) {
+        return {
+          allowed: false,
+          reason: `Approval amount exceeds maxApprovalAmount (${maxApproval})`,
+        };
+      }
+    } catch {
+      return {
+        allowed: false,
+        reason: "Invalid approval amount format",
+      };
+    }
   }
 
   return { allowed: true };

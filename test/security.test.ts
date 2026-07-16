@@ -5,6 +5,7 @@ import {
   validateTransaction,
   validateOutgoingTransfer,
   validateSwapTransaction,
+  validateApproval,
   isContractWhitelisted,
 } from "../src/security";
 import { testWalletConfig, TEST_TOKEN_ADDRESS } from "./helpers";
@@ -85,6 +86,110 @@ describe("Security Validation", () => {
         chain: "ethereum",
       });
       expect(result.allowed).toBe(true);
+    });
+
+    it("should reject non-positive valueUsd (client cannot understate to 0)", async () => {
+      const result = await validateTransaction({
+        config: testWalletConfig,
+        to: UNISWAP_V2_ADDRESS,
+        valueUsd: 0,
+        chain: "ethereum",
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("valueUsd");
+    });
+
+    it("should reject high-value txs when requireConfirmation is set (fail-closed)", async () => {
+      // Under max (10_000) but over confirmation threshold (1000)
+      const result = await validateTransaction({
+        config: testWalletConfig,
+        to: UNISWAP_V2_ADDRESS,
+        valueUsd: 1500,
+        chain: "ethereum",
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("Confirmation required");
+    });
+  });
+
+  describe("validateApproval", () => {
+    it("should allow approve to DEX router within maxApprovalAmount", async () => {
+      const result = await validateApproval({
+        config: testWalletConfig,
+        to: UNISWAP_V2_ADDRESS,
+        tokenAddress: TEST_TOKEN_ADDRESS,
+        spender: UNISWAP_V2_ADDRESS,
+        amount: "1000",
+        valueUsd: 1,
+        chain: "ethereum",
+        maxApprovalAmount: "1000000",
+      });
+      // Token may need whitelist when whitelistedContractsOnly is true
+      // testWalletConfig defaults whitelistedContractsOnly: true with empty list —
+      // token not in list and not router → reject. Use explicit whitelist.
+      const openConfig = {
+        ...testWalletConfig,
+        security: {
+          ...testWalletConfig.security,
+          whitelistedContractsOnly: false,
+        },
+      };
+      const allowed = await validateApproval({
+        config: openConfig,
+        to: UNISWAP_V2_ADDRESS,
+        tokenAddress: TEST_TOKEN_ADDRESS,
+        spender: UNISWAP_V2_ADDRESS,
+        amount: "1000",
+        valueUsd: 1,
+        chain: "ethereum",
+        maxApprovalAmount: "1000000",
+      });
+      expect(allowed.allowed).toBe(true);
+      // silence unused first result
+      void result;
+    });
+
+    it("should reject approve exceeding maxApprovalAmount", async () => {
+      const openConfig = {
+        ...testWalletConfig,
+        security: {
+          ...testWalletConfig.security,
+          whitelistedContractsOnly: false,
+        },
+      };
+      const result = await validateApproval({
+        config: openConfig,
+        to: UNISWAP_V2_ADDRESS,
+        tokenAddress: TEST_TOKEN_ADDRESS,
+        spender: UNISWAP_V2_ADDRESS,
+        amount: "9999999999999999999999999",
+        valueUsd: 1,
+        chain: "ethereum",
+        maxApprovalAmount: "1000",
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("maxApprovalAmount");
+    });
+
+    it("should reject approve to non-whitelisted spender when enabled", async () => {
+      const strictConfig = {
+        ...testWalletConfig,
+        security: {
+          ...testWalletConfig.security,
+          whitelistedContractsOnly: true,
+          whitelistedContracts: [TEST_TOKEN_ADDRESS],
+        },
+      };
+      const result = await validateApproval({
+        config: strictConfig,
+        to: "0xdead000000000000000000000000000000000000",
+        tokenAddress: TEST_TOKEN_ADDRESS,
+        spender: "0xdead000000000000000000000000000000000000",
+        amount: "1000",
+        valueUsd: 1,
+        chain: "ethereum",
+      });
+      expect(result.allowed).toBe(false);
     });
   });
 

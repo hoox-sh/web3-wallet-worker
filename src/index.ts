@@ -19,6 +19,7 @@ import { storeTransaction, listTransactions } from "./transactions";
 import {
   validateOutgoingTransfer,
   validateSwapTransaction,
+  validateApproval,
 } from "./security";
 import type {
   ChainName,
@@ -220,10 +221,22 @@ async function sendNotification(
       );
       return;
     }
+    const internalKey = env.INTERNAL_KEY_BINDING;
+    if (typeof internalKey !== "string" || !internalKey) {
+      logger.error(
+        "INTERNAL_KEY_BINDING not configured — cannot notify telegram (fail-closed)"
+      );
+      return;
+    }
     logger.info("Calling TELEGRAM_SERVICE binding for notification");
-    const resp = await serviceFetch(env.TELEGRAM_SERVICE, "/alert", {
-      message,
-    });
+    // Flat alert body (message + optional chatId) — matches telegram /alert
+    // contract after H4 fix. Always send internal auth.
+    const resp = await serviceFetch(
+      env.TELEGRAM_SERVICE,
+      "/alert",
+      { message },
+      { headers: { "X-Internal-Auth-Key": internalKey } }
+    );
     if (!resp.ok) {
       const text = await resp.text();
       logger.error("Error from TELEGRAM_SERVICE", {
@@ -595,9 +608,9 @@ router.post(
       await ensureConfigMigrated(env);
       const config = await getConfig(env.CONFIG_KV);
 
-      if (body.valueUsd === undefined) {
+      if (body.valueUsd === undefined || !(body.valueUsd > 0)) {
         return Errors.badRequest(
-          "valueUsd is required for transaction limit enforcement"
+          "valueUsd is required and must be a positive number for limit enforcement"
         );
       }
       if (!isValidEthereumAddress(body.to)) {
@@ -612,6 +625,18 @@ router.post(
         chain: body.chain,
       });
       if (!validation.allowed) {
+        // 403 for policy denies; 409 for confirmation-required so clients can
+        // distinguish "forbidden" from "needs second step".
+        if (validation.reason === "Confirmation required") {
+          return createJsonResponse(
+            {
+              success: false,
+              error: validation.reason,
+              code: "CONFIRMATION_REQUIRED",
+            },
+            409
+          );
+        }
         return Errors.forbidden(validation.reason || "Transaction not allowed");
       }
 
@@ -666,6 +691,9 @@ router.post(
       if (!isValidEthereumAddress(body.tokenAddress)) {
         return Errors.badRequest("Invalid token address format.");
       }
+      if (!isValidEthereumAddress(body.spender)) {
+        return Errors.badRequest("Invalid spender address format.");
+      }
 
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
@@ -673,6 +701,26 @@ router.post(
       // body.chain is validated non-undefined by guard above
       const chain = body.chain!;
       const wallet = connectWallet(baseWallet, chain);
+      await ensureConfigMigrated(env);
+      const config = await getConfig(env.CONFIG_KV);
+
+      // C5: approvals previously skipped all security policy checks.
+      const approvalCheck = await validateApproval({
+        config,
+        to: body.spender,
+        tokenAddress: body.tokenAddress,
+        spender: body.spender,
+        amount: body.amount,
+        valueUsd: 1,
+        chain,
+        maxApprovalAmount: config.dex.maxApprovalAmount,
+      });
+      if (!approvalCheck.allowed) {
+        return Errors.forbidden(
+          approvalCheck.reason || "Approval not allowed by security policy"
+        );
+      }
+
       const amount = BigInt(body.amount);
       const txHash = await approveToken(
         wallet,
@@ -807,9 +855,9 @@ router.post(
         );
       }
 
-      if (body.valueUsd === undefined) {
+      if (body.valueUsd === undefined || !(body.valueUsd > 0)) {
         return Errors.badRequest(
-          "valueUsd is required for transaction limit enforcement"
+          "valueUsd is required and must be a positive number for limit enforcement"
         );
       }
 
@@ -822,6 +870,16 @@ router.post(
         chain: body.chain,
       });
       if (!swapValidation.allowed) {
+        if (swapValidation.reason === "Confirmation required") {
+          return createJsonResponse(
+            {
+              success: false,
+              error: swapValidation.reason,
+              code: "CONFIRMATION_REQUIRED",
+            },
+            409
+          );
+        }
         return Errors.forbidden(
           swapValidation.reason || "Swap not allowed by security policy"
         );
