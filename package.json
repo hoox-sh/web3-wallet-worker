@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "description": "Cloudflare worker for Web3 wallet operations using ethers.js",
-  "license": "CC-BY-4.0",
+  "license": "Apache-2.0",
   "main": "src/index.ts",
   "type": "module",
   "scripts": {
