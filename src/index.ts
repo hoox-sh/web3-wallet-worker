@@ -43,7 +43,7 @@ import {
 import { trackAnalytics } from "@jango-blockchained/hoox-shared/analytics";
 import type { AnalyticsEnv } from "@jango-blockchained/hoox-shared/analytics";
 import { healthCheck } from "@jango-blockchained/hoox-shared/health";
-import { serviceFetch } from "@jango-blockchained/hoox-shared/service-bindings";
+import { authenticatedServiceFetch } from "@jango-blockchained/hoox-shared/service-bindings";
 import { createRouter } from "@jango-blockchained/hoox-shared/router";
 import type { InternalAuthEnv } from "@jango-blockchained/hoox-shared/middleware";
 import type { KVNamespace, D1Database } from "@cloudflare/workers-types";
@@ -236,11 +236,11 @@ async function sendNotification(
     logger.info("Calling TELEGRAM_SERVICE binding for notification");
     // Flat alert body (message + optional chatId) — matches telegram /alert
     // contract after H4 fix. Always send internal auth.
-    const resp = await serviceFetch(
+    const resp = await authenticatedServiceFetch(
       env.TELEGRAM_SERVICE,
+      { INTERNAL_KEY_BINDING: internalKey },
       "/alert",
-      { message },
-      { headers: { "X-Internal-Auth-Key": internalKey } }
+      { message }
     );
     if (!resp.ok) {
       const text = await resp.text();
