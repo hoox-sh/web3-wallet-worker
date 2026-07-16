@@ -1,7 +1,12 @@
 // workers/web3-wallet-worker/test/security.test.ts
 
 import { describe, it, expect } from "bun:test";
-import { validateTransaction, isContractWhitelisted } from "../src/security";
+import {
+  validateTransaction,
+  validateOutgoingTransfer,
+  validateSwapTransaction,
+  isContractWhitelisted,
+} from "../src/security";
 import { testWalletConfig, TEST_TOKEN_ADDRESS } from "./helpers";
 
 describe("Security Validation", () => {
@@ -76,6 +81,87 @@ describe("Security Validation", () => {
       const result = await validateTransaction({
         config: strictConfig,
         to: UNISWAP_V2_ADDRESS,
+        valueUsd: 100,
+        chain: "ethereum",
+      });
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  describe("validateOutgoingTransfer", () => {
+    it("should validate recipient address, not token contract", async () => {
+      const strictConfig = {
+        ...testWalletConfig,
+        security: {
+          ...testWalletConfig.security,
+          whitelistedContractsOnly: true,
+          whitelistedContracts: [TEST_TOKEN_ADDRESS],
+        },
+      };
+      const result = await validateOutgoingTransfer({
+        config: strictConfig,
+        to: "0xdead000000000000000000000000000000000000",
+        tokenAddress: TEST_TOKEN_ADDRESS,
+        valueUsd: 100,
+        chain: "ethereum",
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("whitelist");
+    });
+
+    it("should allow whitelisted token and recipient within limits", async () => {
+      const strictConfig = {
+        ...testWalletConfig,
+        security: {
+          ...testWalletConfig.security,
+          whitelistedContractsOnly: true,
+          whitelistedContracts: [
+            TEST_TOKEN_ADDRESS,
+            "0x1111111111111111111111111111111111111111",
+          ],
+        },
+      };
+      const result = await validateOutgoingTransfer({
+        config: strictConfig,
+        to: "0x1111111111111111111111111111111111111111",
+        tokenAddress: TEST_TOKEN_ADDRESS,
+        valueUsd: 100,
+        chain: "ethereum",
+      });
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  describe("validateSwapTransaction", () => {
+    it("should reject swap exceeding max value", async () => {
+      const result = await validateSwapTransaction({
+        config: testWalletConfig,
+        to: UNISWAP_V2_ADDRESS,
+        tokenIn: TEST_TOKEN_ADDRESS,
+        tokenOut: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        valueUsd: 50000,
+        chain: "ethereum",
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("exceeds");
+    });
+
+    it("should allow swap via DEX router within limits", async () => {
+      const swapConfig = {
+        ...testWalletConfig,
+        security: {
+          ...testWalletConfig.security,
+          whitelistedContracts: [
+            TEST_TOKEN_ADDRESS,
+            "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+          ],
+        },
+      };
+      const result = await validateSwapTransaction({
+        config: swapConfig,
+        to: UNISWAP_V2_ADDRESS,
+        tokenIn: TEST_TOKEN_ADDRESS,
+        tokenOut: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
         valueUsd: 100,
         chain: "ethereum",
       });

@@ -16,7 +16,10 @@ import {
 } from "./tokens";
 import { getQuote, executeSwap } from "./dex";
 import { storeTransaction, listTransactions } from "./transactions";
-import { validateTransaction } from "./security";
+import {
+  validateOutgoingTransfer,
+  validateSwapTransaction,
+} from "./security";
 import type {
   ChainName,
   WalletConfig,
@@ -300,6 +303,8 @@ const SwapRequestSchema = z.object({
     .regex(/^0x[a-fA-F0-9]{40}$/)
     .optional(),
   deadline: z.number().int().positive().optional(),
+  /** USD notional for security limit enforcement (required on mutating routes). */
+  valueUsd: z.number().nonnegative().optional(),
 });
 
 const TransferTokenSchema = z.object({
@@ -315,6 +320,8 @@ const TransferTokenSchema = z.object({
     .regex(/^0x[a-fA-F0-9]{40}$/)
     .optional(),
   amount: z.string().optional(),
+  /** USD notional for security limit enforcement (required on mutating routes). */
+  valueUsd: z.number().nonnegative().optional(),
 });
 
 const ApproveTokenSchema = z.object({
@@ -588,10 +595,20 @@ router.post(
       await ensureConfigMigrated(env);
       const config = await getConfig(env.CONFIG_KV);
 
-      const validation = await validateTransaction({
+      if (body.valueUsd === undefined) {
+        return Errors.badRequest(
+          "valueUsd is required for transaction limit enforcement"
+        );
+      }
+      if (!isValidEthereumAddress(body.to)) {
+        return Errors.badRequest("Invalid recipient address format.");
+      }
+
+      const validation = await validateOutgoingTransfer({
         config,
-        to: body.tokenAddress,
-        valueUsd: 0,
+        to: body.to,
+        tokenAddress: body.tokenAddress,
+        valueUsd: body.valueUsd,
         chain: body.chain,
       });
       if (!validation.allowed) {
@@ -787,6 +804,26 @@ router.post(
       if (!routerAddr) {
         return Errors.badRequest(
           `No DEX router configured for chain: ${chain}`
+        );
+      }
+
+      if (body.valueUsd === undefined) {
+        return Errors.badRequest(
+          "valueUsd is required for transaction limit enforcement"
+        );
+      }
+
+      const swapValidation = await validateSwapTransaction({
+        config,
+        to: routerAddr,
+        tokenIn: body.tokenIn,
+        tokenOut: body.tokenOut,
+        valueUsd: body.valueUsd,
+        chain: body.chain,
+      });
+      if (!swapValidation.allowed) {
+        return Errors.forbidden(
+          swapValidation.reason || "Swap not allowed by security policy"
         );
       }
 
