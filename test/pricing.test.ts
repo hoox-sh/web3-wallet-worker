@@ -56,12 +56,15 @@ describe("pricing", () => {
     expect(est.valueUsd).toBe(100);
   });
 
-  it("resolveEnforcedValueUsd fails closed for unpriced tokens", async () => {
+  it("resolveEnforcedValueUsd fails closed when no stable/native/dex price", async () => {
+    // Unknown token, no DEX pair, no stable match → unavailable
     const result = await resolveEnforcedValueUsd({
       chain: "ethereum",
       tokenAddress: "0x1111111111111111111111111111111111111111",
       amountRaw: 10n ** 18n,
     });
+    // getTokenInfo is mocked; getAmountsOut will fail without a real provider
+    // → unavailable → fail closed
     expect(result.ok).toBe(false);
   });
 

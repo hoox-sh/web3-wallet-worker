@@ -3,7 +3,7 @@
 
 import { ethers } from "ethers";
 import type { ChainName } from "./types";
-import { DEFAULT_CHAIN_CONFIGS } from "./constants";
+import { DEFAULT_CHAIN_CONFIGS, DEX_ROUTER_ABI } from "./constants";
 import { getTokenInfo } from "./tokens";
 import { getReadOnlyProvider } from "./providers";
 
@@ -25,6 +25,15 @@ const STABLECOIN_ADDRESSES = new Set(
     "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3", // bsc dai
   ].map((a) => a.toLowerCase())
 );
+
+/** Preferred USD stable per chain for DEX quotes (USDC where available). */
+const CHAIN_QUOTE_STABLE: Record<ChainName, string | null> = {
+  ethereum: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+  bsc: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+  polygon: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+  arbitrum: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+  optimism: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", // USDC native on OP
+};
 
 const NATIVE_ZERO = "0x0000000000000000000000000000000000000000";
 
@@ -61,9 +70,80 @@ async function fetchBinancePriceUsd(pair: string): Promise<number | null> {
   }
 }
 
+/**
+ * Quote token amount → preferred stable via Uniswap-V2-compatible router.
+ * Tries direct path first, then token → WNATIVE → stable.
+ */
+async function quoteTokenToStableUsd(
+  chain: ChainName,
+  tokenAddress: string,
+  amountRaw: bigint
+): Promise<number | null> {
+  const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
+  const routerAddr = chainConfig?.dexRouterAddress;
+  const wNative = chainConfig?.wrappedNativeAddress;
+  const stable = CHAIN_QUOTE_STABLE[chain];
+  if (!routerAddr || !wNative || !stable || amountRaw <= 0n) return null;
+
+  const token = tokenAddress.toLowerCase();
+  if (token === stable.toLowerCase()) {
+    // Should have been caught as stablecoin earlier; defensive.
+    return null;
+  }
+
+  const cacheKey = `dex:${chain}:${token}:${amountRaw.toString()}`;
+  const cached = priceCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.usd;
+
+  try {
+    const provider = getReadOnlyProvider(chain);
+    const router = new ethers.Contract(routerAddr, DEX_ROUTER_ABI, provider);
+    const tokenIn = ethers.getAddress(tokenAddress);
+    const stableOut = ethers.getAddress(stable);
+    const wrapped = ethers.getAddress(wNative);
+
+    const paths: string[][] = [
+      [tokenIn, stableOut],
+      [tokenIn, wrapped, stableOut],
+    ];
+
+    let amountOut: bigint | null = null;
+    for (const path of paths) {
+      // Skip degenerate paths
+      if (path[0].toLowerCase() === path[path.length - 1].toLowerCase()) {
+        continue;
+      }
+      try {
+        const amounts: bigint[] = await router.getAmountsOut(amountRaw, path);
+        const out = amounts[amounts.length - 1];
+        if (out > 0n) {
+          amountOut = out;
+          break;
+        }
+      } catch {
+        // pair missing — try next path
+      }
+    }
+
+    if (amountOut === null) return null;
+
+    const stableInfo = await getTokenInfo(provider, stable);
+    const usd = Number(ethers.formatUnits(amountOut, stableInfo.decimals));
+    if (!Number.isFinite(usd) || usd <= 0) return null;
+
+    priceCache.set(cacheKey, {
+      usd,
+      expiresAt: Date.now() + PRICE_CACHE_TTL_MS,
+    });
+    return usd;
+  } catch {
+    return null;
+  }
+}
+
 export interface ValueEstimate {
   valueUsd: number;
-  source: "stablecoin" | "native-oracle" | "unavailable";
+  source: "stablecoin" | "native-oracle" | "dex-quote" | "unavailable";
   decimals: number;
   amountHuman: number;
 }
@@ -74,7 +154,8 @@ export interface ValueEstimate {
  * Priority:
  * 1. Known USD stables → 1:1
  * 2. Native currency (or wrapped native) → Binance public ticker
- * 3. Otherwise unavailable (caller should fail closed)
+ * 3. Other ERC-20 → DEX quote to chain stable (USDC), direct or via WNATIVE
+ * 4. Otherwise unavailable (caller should fail closed)
  *
  * Client-supplied valueUsd is ignored.
  */
@@ -127,15 +208,24 @@ export async function estimateTokenValueUsd(params: {
         amountHuman,
       };
     } catch {
-      // Fall through to unavailable
+      // Fall through
     }
   }
 
-  // Unknown ERC-20: try decimals for human amount but no price
+  // ERC-20 via DEX quote → stable
   try {
     const provider = getReadOnlyProvider(chain);
     const info = await getTokenInfo(provider, tokenAddress);
     const amountHuman = Number(ethers.formatUnits(amountRaw, info.decimals));
+    const dexUsd = await quoteTokenToStableUsd(chain, tokenAddress, amountRaw);
+    if (dexUsd !== null && dexUsd > 0) {
+      return {
+        valueUsd: dexUsd,
+        source: "dex-quote",
+        decimals: info.decimals,
+        amountHuman,
+      };
+    }
     return {
       valueUsd: 0,
       source: "unavailable",
@@ -173,7 +263,7 @@ export async function resolveEnforcedValueUsd(params: {
     return {
       ok: false,
       reason:
-        "Unable to price token server-side; only native assets and known USD stables are auto-priced. Whitelist-only transfers of unpriced tokens are blocked.",
+        "Unable to price token server-side (stable, native oracle, or DEX quote to USDC failed). Transfer blocked until a price path is available.",
     };
   }
   return {
