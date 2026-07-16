@@ -43,7 +43,13 @@ import {
 import { trackAnalytics } from "@jango-blockchained/hoox-shared/analytics";
 import type { AnalyticsEnv } from "@jango-blockchained/hoox-shared/analytics";
 import { healthCheck } from "@jango-blockchained/hoox-shared/health";
-import { authenticatedServiceFetch } from "@jango-blockchained/hoox-shared/service-bindings";
+import {
+  authenticatedServiceFetch,
+  TELEGRAM_ALERT_AUTH_KEY_FIELDS,
+  WALLET_EXECUTE_AUTH_KEY_FIELDS,
+  resolveInternalAuthKey,
+  type AuthenticatedServiceEnv,
+} from "@jango-blockchained/hoox-shared/service-bindings";
 import { createRouter } from "@jango-blockchained/hoox-shared/router";
 import type { InternalAuthEnv } from "@jango-blockchained/hoox-shared/middleware";
 import type { KVNamespace, D1Database } from "@cloudflare/workers-types";
@@ -63,7 +69,7 @@ export interface Env extends AnalyticsEnv, InternalAuthEnv {
 }
 
 const router = createRouter<Env>();
-const requireAuth = createInternalAuthMiddleware();
+const requireAuth = createInternalAuthMiddleware(WALLET_EXECUTE_AUTH_KEY_FIELDS);
 const logger = createLogger({ service: "web3-wallet-worker" });
 
 // ── Migration ──
@@ -226,21 +232,19 @@ async function sendNotification(
       );
       return;
     }
-    const internalKey = env.INTERNAL_KEY_BINDING;
-    if (typeof internalKey !== "string" || !internalKey) {
+    if (!resolveInternalAuthKey(env, TELEGRAM_ALERT_AUTH_KEY_FIELDS)) {
       logger.error(
-        "INTERNAL_KEY_BINDING not configured — cannot notify telegram (fail-closed)"
+        "Telegram alert auth key not configured — cannot notify telegram (fail-closed)"
       );
       return;
     }
     logger.info("Calling TELEGRAM_SERVICE binding for notification");
-    // Flat alert body (message + optional chatId) — matches telegram /alert
-    // contract after H4 fix. Always send internal auth.
     const resp = await authenticatedServiceFetch(
       env.TELEGRAM_SERVICE,
-      { INTERNAL_KEY_BINDING: internalKey },
+      env as AuthenticatedServiceEnv,
       "/alert",
-      { message }
+      { message },
+      { internalKeyFields: TELEGRAM_ALERT_AUTH_KEY_FIELDS }
     );
     if (!resp.ok) {
       const text = await resp.text();
