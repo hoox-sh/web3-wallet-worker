@@ -26,13 +26,29 @@ const STABLECOIN_ADDRESSES = new Set(
   ].map((a) => a.toLowerCase())
 );
 
-/** Preferred USD stable per chain for DEX quotes (USDC where available). */
-const CHAIN_QUOTE_STABLE: Record<ChainName, string | null> = {
-  ethereum: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-  bsc: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
-  polygon: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
-  arbitrum: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-  optimism: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", // USDC native on OP
+/** Preferred USD quote tokens per chain (try in order). */
+const CHAIN_QUOTE_STABLES: Record<ChainName, string[]> = {
+  ethereum: [
+    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
+    "0xdAC17F958D2ee523a2206206994597C13D831ec7", // USDT
+    "0x6B175474E89094C44Da98b954EedeAC495271d0F", // DAI
+  ],
+  bsc: [
+    "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // USDC
+    "0x55d398326f99059fF775485246999027B3197955", // USDT
+  ],
+  polygon: [
+    "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", // USDC
+    "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
+  ],
+  arbitrum: [
+    "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", // USDC
+    "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", // USDT
+  ],
+  optimism: [
+    "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", // USDC
+    "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", // USDT
+  ],
 };
 
 const NATIVE_ZERO = "0x0000000000000000000000000000000000000000";
@@ -72,7 +88,11 @@ async function fetchBinancePriceUsd(pair: string): Promise<number | null> {
 
 /**
  * Quote token amount → preferred stable via Uniswap-V2-compatible router.
- * Tries direct path first, then token → WNATIVE → stable.
+ *
+ * Path search (multi-stable + multi-hop):
+ *  1. token → stable (each preferred stable)
+ *  2. token → WNATIVE → stable
+ *  3. token → stableA → stableB (cross-stable hop for thin markets)
  */
 async function quoteTokenToStableUsd(
   chain: ChainName,
@@ -82,13 +102,14 @@ async function quoteTokenToStableUsd(
   const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
   const routerAddr = chainConfig?.dexRouterAddress;
   const wNative = chainConfig?.wrappedNativeAddress;
-  const stable = CHAIN_QUOTE_STABLE[chain];
-  if (!routerAddr || !wNative || !stable || amountRaw <= 0n) return null;
+  const stables = CHAIN_QUOTE_STABLES[chain] ?? [];
+  if (!routerAddr || !wNative || stables.length === 0 || amountRaw <= 0n) {
+    return null;
+  }
 
   const token = tokenAddress.toLowerCase();
-  if (token === stable.toLowerCase()) {
-    // Should have been caught as stablecoin earlier; defensive.
-    return null;
+  if (stables.some((s) => s.toLowerCase() === token)) {
+    return null; // handled as stablecoin earlier
   }
 
   const cacheKey = `dex:${chain}:${token}:${amountRaw.toString()}`;
@@ -99,43 +120,51 @@ async function quoteTokenToStableUsd(
     const provider = getReadOnlyProvider(chain);
     const router = new ethers.Contract(routerAddr, DEX_ROUTER_ABI, provider);
     const tokenIn = ethers.getAddress(tokenAddress);
-    const stableOut = ethers.getAddress(stable);
     const wrapped = ethers.getAddress(wNative);
 
-    const paths: string[][] = [
-      [tokenIn, stableOut],
-      [tokenIn, wrapped, stableOut],
-    ];
+    type PathAttempt = { path: string[]; stableOut: string };
+    const attempts: PathAttempt[] = [];
 
-    let amountOut: bigint | null = null;
-    for (const path of paths) {
-      // Skip degenerate paths
-      if (path[0].toLowerCase() === path[path.length - 1].toLowerCase()) {
-        continue;
-      }
+    for (const stable of stables) {
+      const stableOut = ethers.getAddress(stable);
+      attempts.push({ path: [tokenIn, stableOut], stableOut });
+      attempts.push({ path: [tokenIn, wrapped, stableOut], stableOut });
+    }
+    // Cross-stable hop: token → USDC → USDT (or reverse) for thin pairs
+    if (stables.length >= 2) {
+      const a = ethers.getAddress(stables[0]);
+      const b = ethers.getAddress(stables[1]);
+      attempts.push({ path: [tokenIn, a, b], stableOut: b });
+      attempts.push({ path: [tokenIn, b, a], stableOut: a });
+      attempts.push({ path: [tokenIn, wrapped, a, b], stableOut: b });
+    }
+
+    for (const { path, stableOut } of attempts) {
+      const ends = path.map((p) => p.toLowerCase());
+      if (ends[0] === ends[ends.length - 1]) continue;
+      // Drop paths with duplicate consecutive hops
+      if (ends.some((p, i) => i > 0 && p === ends[i - 1])) continue;
+
       try {
         const amounts: bigint[] = await router.getAmountsOut(amountRaw, path);
         const out = amounts[amounts.length - 1];
-        if (out > 0n) {
-          amountOut = out;
-          break;
-        }
+        if (out <= 0n) continue;
+
+        const stableInfo = await getTokenInfo(provider, stableOut);
+        const usd = Number(ethers.formatUnits(out, stableInfo.decimals));
+        if (!Number.isFinite(usd) || usd <= 0) continue;
+
+        priceCache.set(cacheKey, {
+          usd,
+          expiresAt: Date.now() + PRICE_CACHE_TTL_MS,
+        });
+        return usd;
       } catch {
         // pair missing — try next path
       }
     }
 
-    if (amountOut === null) return null;
-
-    const stableInfo = await getTokenInfo(provider, stable);
-    const usd = Number(ethers.formatUnits(amountOut, stableInfo.decimals));
-    if (!Number.isFinite(usd) || usd <= 0) return null;
-
-    priceCache.set(cacheKey, {
-      usd,
-      expiresAt: Date.now() + PRICE_CACHE_TTL_MS,
-    });
-    return usd;
+    return null;
   } catch {
     return null;
   }
