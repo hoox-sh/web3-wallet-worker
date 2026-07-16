@@ -129,7 +129,11 @@ async function ensureConfigMigrated(env: Env): Promise<void> {
 
 // ── Helpers ──
 
-/** Cache wallet instances by secret to avoid repeated secp256k1 key derivation */
+/** Opaque cache keys — never use secret material as Map keys (heap retention risk). */
+const WALLET_CACHE_KEY_PK = "wallet:pk:v1";
+const WALLET_CACHE_KEY_MNEMONIC = "wallet:mnemonic:v1";
+
+/** Cache wallet instances per isolate to avoid repeated secp256k1 key derivation */
 const walletCache = new Map<string, ethers.Wallet>();
 
 /**
@@ -166,10 +170,10 @@ function createWalletFromEnv(
     if (!/^(0x)[0-9a-fA-F]{64}$/.test(privateKey)) {
       return Errors.badRequest("Configured private key secret is invalid.");
     }
-    let wallet = walletCache.get(privateKey);
+    let wallet = walletCache.get(WALLET_CACHE_KEY_PK);
     if (!wallet) {
       wallet = new ethers.Wallet(privateKey);
-      walletCache.set(privateKey, wallet);
+      walletCache.set(WALLET_CACHE_KEY_PK, wallet);
     }
     return { wallet, source: "private_key" };
   }
@@ -178,10 +182,10 @@ function createWalletFromEnv(
     if (mnemonic.split(" ").length < 12) {
       return Errors.badRequest("Configured mnemonic phrase secret is invalid.");
     }
-    let wallet = walletCache.get(mnemonic);
+    let wallet = walletCache.get(WALLET_CACHE_KEY_MNEMONIC);
     if (!wallet) {
       wallet = ethers.Wallet.fromPhrase(mnemonic) as unknown as ethers.Wallet;
-      walletCache.set(mnemonic, wallet);
+      walletCache.set(WALLET_CACHE_KEY_MNEMONIC, wallet);
     }
     return { wallet, source: "mnemonic" };
   }
