@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 HOOX · HOOX · jango-blockchained
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 // workers/web3-wallet-worker/test/helpers.ts
 
 import { mock } from "bun:test";

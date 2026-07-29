@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 HOOX · HOOX · jango-blockchained
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 // workers/web3-wallet-worker/src/pricing.ts
 // Server-side USD notional estimation — never trust client valueUsd alone.
 

@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 HOOX · HOOX · jango-blockchained
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 // workers/web3-wallet-worker/src/transactions.ts
 
 import type { D1Database } from "@cloudflare/workers-types";

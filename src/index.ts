@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 HOOX · HOOX · jango-blockchained
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 // workers/web3-wallet-worker/src/index.ts
 // ethers v6 works with nodejs_compat flag (enabled in wrangler.jsonc).
 // nodejs_compat provides Node.js crypto polyfills that ethers v6 requires.

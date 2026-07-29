@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 HOOX · HOOX · jango-blockchained
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
  * Focused tests for the C-5 fix from the 2026-06-27 worker audit:
  *
  * C-5: PUT /config previously used a Zod schema with `.passthrough()`
