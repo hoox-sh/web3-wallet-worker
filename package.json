@@ -2,7 +2,7 @@
   "name": "web3-wallet-worker",
   "version": "0.0.1",
   "private": true,
-  "description": "Cloudflare worker for Web3 wallet operations using ethers.js",
+  "description": "HOOX web3 wallet worker: ethers.js v6 identity from Secrets Store (private key or BIP-39 mnemonic); telegram + analytics notifications.",
   "license": "Apache-2.0",
   "main": "src/index.ts",
   "type": "module",
@@ -24,5 +24,9 @@
     "@hoox-sh/hoox-shared": "workspace:*",
     "ethers": "^6.16.0"
   },
-  "author": "jango-blockchained (hoox-sh)"
+  "author": "jango-blockchained (hoox-sh)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hoox-sh/web3-wallet-worker.git"
+  }
 }
