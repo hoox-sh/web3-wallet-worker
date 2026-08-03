@@ -21,8 +21,8 @@
     "wrangler": "^4.95.0"
   },
   "dependencies": {
-    "@jango-blockchained/hoox-shared": "workspace:*",
+    "@hoox-sh/hoox-shared": "workspace:*",
     "ethers": "^6.16.0"
   },
-  "author": "jango-blockchained"
+  "author": "jango-blockchained (hoox-sh)"
 }

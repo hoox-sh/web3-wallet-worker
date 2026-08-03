@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2026 HOOX · HOOX · jango-blockchained
+ * Copyright (c) 2026 HOOX · HOOX · jango-blockchained (hoox-sh)
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -39,24 +39,24 @@ import {
   createJsonResponse,
   Errors,
   toError,
-} from "@jango-blockchained/hoox-shared/errors";
+} from "@hoox-sh/hoox-shared/errors";
 import {
   createLogger,
   withRequestLog,
   createInternalAuthMiddleware,
-} from "@jango-blockchained/hoox-shared/middleware";
-import { trackAnalytics } from "@jango-blockchained/hoox-shared/analytics";
-import type { AnalyticsEnv } from "@jango-blockchained/hoox-shared/analytics";
-import { healthCheck } from "@jango-blockchained/hoox-shared/health";
+} from "@hoox-sh/hoox-shared/middleware";
+import { trackAnalytics } from "@hoox-sh/hoox-shared/analytics";
+import type { AnalyticsEnv } from "@hoox-sh/hoox-shared/analytics";
+import { healthCheck } from "@hoox-sh/hoox-shared/health";
 import {
   authenticatedServiceFetch,
   TELEGRAM_ALERT_AUTH_KEY_FIELDS,
   WALLET_EXECUTE_AUTH_KEY_FIELDS,
   resolveInternalAuthKey,
   type AuthenticatedServiceEnv,
-} from "@jango-blockchained/hoox-shared/service-bindings";
-import { createRouter } from "@jango-blockchained/hoox-shared/router";
-import type { InternalAuthEnv } from "@jango-blockchained/hoox-shared/middleware";
+} from "@hoox-sh/hoox-shared/service-bindings";
+import { createRouter } from "@hoox-sh/hoox-shared/router";
+import type { InternalAuthEnv } from "@hoox-sh/hoox-shared/middleware";
 import type { KVNamespace, D1Database } from "@cloudflare/workers-types";
 
 export interface Env extends AnalyticsEnv, InternalAuthEnv {
