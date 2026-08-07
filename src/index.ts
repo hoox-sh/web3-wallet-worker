@@ -757,7 +757,7 @@ router.post(
     } catch (error: unknown) {
       // Never log secret-bearing error objects; stringify message only
       logger.error("Error in POST /transfer", {
-        error: toError(error, "Unknown").message,
+        error: toError(error, "Unknown"),
       });
       return Errors.internal(error);
     }
@@ -857,7 +857,7 @@ router.post(
       return createJsonResponse({ txHash, id: record.id }, 200);
     } catch (error: unknown) {
       logger.error("Error in POST /approve", {
-        error: toError(error, "Unknown").message,
+        error: toError(error, "Unknown"),
       });
       return Errors.internal(error);
     }
@@ -1063,7 +1063,7 @@ router.post(
       return createJsonResponse({ txHash, id: record.id }, 200);
     } catch (error: unknown) {
       logger.error("Error in POST /swap", {
-        error: toError(error, "Unknown").message,
+        error: toError(error, "Unknown"),
       });
       return Errors.internal(error);
     }
