@@ -35,19 +35,55 @@ const mockContractCtor = mock(
 );
 
 mock.module("ethers", () => {
+  // Keep Wallet / JsonRpcProvider so sibling tests are not poisoned by a partial mock.
+  class MockWallet {
+    address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+    privateKey: string;
+    provider: unknown = null;
+    constructor(key: string) {
+      this.privateKey = key;
+    }
+    static fromPhrase(_phrase: string) {
+      return new MockWallet("0xmock");
+    }
+    connect(provider: unknown) {
+      this.provider = provider;
+      return this;
+    }
+  }
+  class MockJsonRpcProvider {
+    constructor(
+      public url?: string,
+      public network?: unknown,
+      public opts?: unknown
+    ) {}
+    async getFeeData() {
+      return { maxFeePerGas: 20n * 10n ** 9n, gasPrice: 20n * 10n ** 9n };
+    }
+    async getBalance() {
+      return 0n;
+    }
+  }
   const ethers = {
     Contract: mockContractCtor,
+    Wallet: MockWallet,
+    JsonRpcProvider: MockJsonRpcProvider,
     getAddress: (addr: string) => addr,
-    formatUnits: (value: bigint, decimals: number) => {
-      const divisor = 10n ** BigInt(decimals);
+    formatUnits: (value: bigint, decimals: number | string) => {
+      const d = typeof decimals === "string" ? 9 : decimals;
+      const divisor = 10n ** BigInt(d);
       const intPart = value / divisor;
       const fracPart = value % divisor;
-      const padded = String(fracPart).padStart(decimals, "0");
+      const padded = String(fracPart).padStart(d, "0");
       return `${intPart}.${padded}`;
+    },
+    formatEther: (value: bigint) => {
+      const divisor = 10n ** 18n;
+      return `${value / divisor}.${String(value % divisor).padStart(18, "0")}`;
     },
     ZeroAddress: "0x0000000000000000000000000000000000000000",
   };
-  return { ethers };
+  return { ethers, ...ethers, default: ethers };
 });
 
 // ---------------------------------------------------------------------------

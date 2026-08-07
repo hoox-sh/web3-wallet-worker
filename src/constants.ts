@@ -90,6 +90,13 @@ export const DEFAULT_WALLET_CONFIG: WalletConfig = {
 /** KV config key */
 export const KV_CONFIG_KEY = "wallet:config";
 
+/**
+ * Optional max gas price (gwei) for the gas-price trap.
+ * When set and current network gas exceeds this value, mutating txs are dropped
+ * before signing. See docs/devops/workers/web3-wallet-worker.mdx.
+ */
+export const KV_MAX_GAS_PRICE_GWEI = "web3:max_gas_price_gwei";
+
 /** Common ERC20 ABI (minimal) */
 export const ERC20_ABI = [
   "function name() view returns (string)",

@@ -22,7 +22,8 @@
   },
   "dependencies": {
     "@hoox-sh/hoox-shared": "workspace:*",
-    "ethers": "^6.16.0"
+    "ethers": "^6.16.0",
+    "zod": "^4.0.0"
   },
   "author": "jango-blockchained (hoox-sh)",
   "repository": {

@@ -11,6 +11,7 @@ import {
   getWallet,
   getProvider,
   connectWallet,
+  isSafeRpcUrl,
 } from "../src/providers";
 import {
   TEST_PRIVATE_KEY,
@@ -58,6 +59,32 @@ describe("Provider Factory", () => {
     it("should detect private key format without 0x prefix", () => {
       const wallet = getWallet(TEST_PRIVATE_KEY.slice(2));
       expect(wallet.address).toBe(TEST_WALLET_ADDRESS);
+    });
+  });
+
+  describe("isSafeRpcUrl", () => {
+    it("allows https public RPCs", () => {
+      expect(isSafeRpcUrl("https://eth.llamarpc.com")).toBe(true);
+    });
+
+    it("allows localhost http for local Anvil", () => {
+      expect(isSafeRpcUrl("http://127.0.0.1:8545")).toBe(true);
+      expect(isSafeRpcUrl("http://localhost:8545")).toBe(true);
+    });
+
+    it("blocks cloud metadata and non-local http", () => {
+      expect(isSafeRpcUrl("http://169.254.169.254/latest")).toBe(false);
+      expect(isSafeRpcUrl("http://evil.example.com")).toBe(false);
+      expect(isSafeRpcUrl("file:///etc/passwd")).toBe(false);
+    });
+  });
+
+  describe("connectWallet", () => {
+    it("attaches a provider to a wallet", () => {
+      const wallet = getWallet(TEST_PRIVATE_KEY);
+      const connected = connectWallet(wallet, "ethereum");
+      expect(connected.provider).toBeDefined();
+      expect(connected.address).toBe(TEST_WALLET_ADDRESS);
     });
   });
 });

@@ -33,17 +33,29 @@ Cloudflare Secrets Store
 
 ### Entry Points
 
-| Method | Path      | Auth         | Description                             |
-| ------ | --------- | ------------ | --------------------------------------- |
-| `GET`  | `/`       | Internal key | Wallet init: derive address from secret |
-| `GET`  | `/health` | None         | Liveness probe                          |
+| Method | Path              | Auth         | Description                                      |
+| ------ | ----------------- | ------------ | ------------------------------------------------ |
+| `GET`  | `/`               | Internal key | Wallet init: derive address from secret          |
+| `GET`  | `/health`         | None         | Liveness probe                                   |
+| `GET`  | `/status`         | Internal key | Address + security summary                       |
+| `GET`  | `/config`         | Internal key | Read wallet / DEX / security config              |
+| `PUT`  | `/config`         | Internal key | Deep-merge config (strict Zod schema)            |
+| `GET`  | `/balance`        | Internal key | Native or ERC-20 balance                         |
+| `POST` | `/transfer`       | Internal key | ERC-20 transfer (gas trap + USD policy)          |
+| `POST` | `/approve`        | Internal key | ERC-20 approve (whitelist + maxApprovalAmount)   |
+| `GET`  | `/quote`          | Internal key | DEX quote                                        |
+| `POST` | `/swap`           | Internal key | DEX swap                                         |
+| `GET`  | `/transactions`   | Internal key | List D1 transaction records                      |
 
 ### Security Model
 
-- **Secrets never in environment**: fetched at runtime from Cloudflare Secrets Store binding
-- **Strict validation**: private key regex-enforced; mnemonic word-count enforced
+- **Secrets never logged**: opaque wallet cache keys; error logs never include key material
+- **Strict validation**: private key `/^0x?[0-9a-fA-F]{64}$/`; mnemonic 12–24 BIP-39 words
+- **Gas price trap**: `CONFIG_KV` key `web3:max_gas_price_gwei` — block signing when network fee exceeds limit
+- **Server-side USD pricing**: client `valueUsd` ignored; fail-closed if asset cannot be priced
+- **RPC URL safety**: HTTPS (or localhost HTTP for Anvil); block metadata / non-local HTTP
 - **Fire-and-forget notifications**: telegram alerts via `ctx.waitUntil` (non-blocking)
-- **Internal auth**: all endpoints except `/health` require `X-Internal-Auth-Key`
+- **Internal auth**: all endpoints except `/health` require `X-Internal-Auth-Key` (fail-closed)
 
 ### Development
 

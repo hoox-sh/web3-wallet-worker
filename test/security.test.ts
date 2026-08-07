@@ -12,6 +12,9 @@ import {
   validateSwapTransaction,
   validateApproval,
   isContractWhitelisted,
+  isValidEthereumAddress,
+  parsePositiveAmount,
+  checkGasPriceLimit,
 } from "../src/security";
 import { testWalletConfig, TEST_TOKEN_ADDRESS } from "./helpers";
 
@@ -320,6 +323,113 @@ describe("Security Validation", () => {
         "0x6b175474e89094c44da98b954eedeac495271d0f"
       );
       expect(result).toBe(true);
+    });
+  });
+
+  describe("isValidEthereumAddress", () => {
+    it("accepts valid checksummed and lower addresses", () => {
+      expect(
+        isValidEthereumAddress("0x6B175474E89094C44Da98b954EedeAC495271d0F")
+      ).toBe(true);
+      expect(
+        isValidEthereumAddress("0x6b175474e89094c44da98b954eedeac495271d0f")
+      ).toBe(true);
+    });
+
+    it("rejects zero address by default", () => {
+      expect(
+        isValidEthereumAddress("0x0000000000000000000000000000000000000000")
+      ).toBe(false);
+      expect(
+        isValidEthereumAddress("0x0000000000000000000000000000000000000000", {
+          allowZero: true,
+        })
+      ).toBe(true);
+    });
+
+    it("rejects short or non-hex", () => {
+      expect(isValidEthereumAddress("0xabc")).toBe(false);
+      expect(isValidEthereumAddress("not-an-address")).toBe(false);
+    });
+  });
+
+  describe("parsePositiveAmount", () => {
+    it("parses integer wei strings", () => {
+      const r = parsePositiveAmount("1000");
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.value).toBe(1000n);
+    });
+
+    it("allows zero", () => {
+      const r = parsePositiveAmount("0");
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.value).toBe(0n);
+    });
+
+    it("rejects decimals and negatives", () => {
+      expect(parsePositiveAmount("1.5").ok).toBe(false);
+      expect(parsePositiveAmount("-1").ok).toBe(false);
+      expect(parsePositiveAmount("").ok).toBe(false);
+      expect(parsePositiveAmount("0x10").ok).toBe(false);
+    });
+  });
+
+  describe("checkGasPriceLimit", () => {
+    it("allows when trap is disabled", async () => {
+      const provider = {
+        getFeeData: async () => ({
+          maxFeePerGas: 100n * 10n ** 9n,
+          gasPrice: 100n * 10n ** 9n,
+        }),
+      } as any;
+      const r = await checkGasPriceLimit({
+        provider,
+        maxGasPriceGwei: null,
+      });
+      expect(r.allowed).toBe(true);
+    });
+
+    it("blocks when network gas exceeds max", async () => {
+      const provider = {
+        getFeeData: async () => ({
+          maxFeePerGas: 200n * 10n ** 9n, // 200 gwei
+          gasPrice: null,
+        }),
+      } as any;
+      const r = await checkGasPriceLimit({
+        provider,
+        maxGasPriceGwei: 50,
+      });
+      expect(r.allowed).toBe(false);
+      expect(r.reason).toContain("exceeds");
+    });
+
+    it("allows when under max", async () => {
+      const provider = {
+        getFeeData: async () => ({
+          maxFeePerGas: 20n * 10n ** 9n,
+          gasPrice: null,
+        }),
+      } as any;
+      const r = await checkGasPriceLimit({
+        provider,
+        maxGasPriceGwei: 50,
+      });
+      expect(r.allowed).toBe(true);
+    });
+
+    it("fails closed when fee data missing", async () => {
+      const provider = {
+        getFeeData: async () => ({
+          maxFeePerGas: null,
+          gasPrice: null,
+        }),
+      } as any;
+      const r = await checkGasPriceLimit({
+        provider,
+        maxGasPriceGwei: 50,
+      });
+      expect(r.allowed).toBe(false);
     });
   });
 });

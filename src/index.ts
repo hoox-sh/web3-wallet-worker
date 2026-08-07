@@ -25,6 +25,9 @@ import {
   validateOutgoingTransfer,
   validateSwapTransaction,
   validateApproval,
+  isValidEthereumAddress,
+  parsePositiveAmount,
+  checkGasPriceLimit,
 } from "./security";
 import { resolveEnforcedValueUsd } from "./pricing";
 import type {
@@ -33,7 +36,11 @@ import type {
   TransactionRecord,
   SwapRequest,
 } from "./types";
-import { DEFAULT_CHAIN_CONFIGS, KV_CONFIG_KEY } from "./constants";
+import {
+  DEFAULT_CHAIN_CONFIGS,
+  KV_CONFIG_KEY,
+  KV_MAX_GAS_PRICE_GWEI,
+} from "./constants";
 
 import {
   createJsonResponse,
@@ -147,15 +154,11 @@ async function ensureConfigMigrated(env: Env): Promise<void> {
 const WALLET_CACHE_KEY_PK = "wallet:pk:v1";
 const WALLET_CACHE_KEY_MNEMONIC = "wallet:mnemonic:v1";
 
+/** Private key: optional 0x + 64 hex chars (matches README / providers). */
+const PRIVATE_KEY_RE = /^(0x)?[0-9a-fA-F]{64}$/;
+
 /** Cache wallet instances per isolate to avoid repeated secp256k1 key derivation */
 const walletCache = new Map<string, ethers.Wallet>();
-
-/**
- * Validate an Ethereum address format: must start with 0x, be 42 chars, valid hex.
- */
-function isValidEthereumAddress(address: string): boolean {
-  return /^(0x)[0-9a-fA-F]{40}$/.test(address);
-}
 
 /**
  * Parse and validate request body against a Zod schema.
@@ -174,6 +177,28 @@ async function parseValidatedBody<T extends z.ZodTypeAny>(
   }
 }
 
+/**
+ * Load optional gas-price trap (gwei) from CONFIG_KV.
+ * Missing / invalid → null (trap disabled).
+ */
+async function loadMaxGasPriceGwei(
+  kv: KVNamespace | undefined
+): Promise<number | null> {
+  if (!kv) return null;
+  try {
+    const raw = await kv.get(KV_MAX_GAS_PRICE_GWEI);
+    if (raw === null || raw === undefined || raw === "") return null;
+    const n = parseFloat(raw);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return n;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Derive wallet from secrets. Never logs key/mnemonic material.
+ */
 function createWalletFromEnv(
   env: Env
 ): { wallet: ethers.Wallet; source: string } | Response {
@@ -181,25 +206,41 @@ function createWalletFromEnv(
   const mnemonic = env.WALLET_MNEMONIC_SECRET;
 
   if (privateKey) {
-    if (!/^(0x)[0-9a-fA-F]{64}$/.test(privateKey)) {
+    const trimmed = privateKey.trim();
+    if (!PRIVATE_KEY_RE.test(trimmed)) {
+      // Do not echo the invalid key value into logs or responses
       return Errors.badRequest("Configured private key secret is invalid.");
     }
+    const normalized = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
     let wallet = walletCache.get(WALLET_CACHE_KEY_PK);
     if (!wallet) {
-      wallet = new ethers.Wallet(privateKey);
-      walletCache.set(WALLET_CACHE_KEY_PK, wallet);
+      try {
+        wallet = new ethers.Wallet(normalized);
+        walletCache.set(WALLET_CACHE_KEY_PK, wallet);
+      } catch {
+        return Errors.badRequest("Configured private key secret is invalid.");
+      }
     }
     return { wallet, source: "private_key" };
   }
 
   if (mnemonic) {
-    if (mnemonic.split(" ").length < 12) {
+    const words = mnemonic.trim().split(/\s+/).filter(Boolean);
+    if (words.length < 12 || words.length > 24) {
       return Errors.badRequest("Configured mnemonic phrase secret is invalid.");
     }
     let wallet = walletCache.get(WALLET_CACHE_KEY_MNEMONIC);
     if (!wallet) {
-      wallet = ethers.Wallet.fromPhrase(mnemonic) as unknown as ethers.Wallet;
-      walletCache.set(WALLET_CACHE_KEY_MNEMONIC, wallet);
+      try {
+        wallet = ethers.Wallet.fromPhrase(
+          words.join(" ")
+        ) as unknown as ethers.Wallet;
+        walletCache.set(WALLET_CACHE_KEY_MNEMONIC, wallet);
+      } catch {
+        return Errors.badRequest(
+          "Configured mnemonic phrase secret is invalid."
+        );
+      }
     }
     return { wallet, source: "mnemonic" };
   }
@@ -564,13 +605,20 @@ router.get(
 
       const provider = getReadOnlyProvider(chain);
 
+      if (!isValidEthereumAddress(address, { allowZero: true })) {
+        return Errors.badRequest("Invalid address format.");
+      }
+
       if (tokenAddress) {
-        if (!isValidEthereumAddress(tokenAddress)) {
+        if (!isValidEthereumAddress(tokenAddress, { allowZero: true })) {
           return Errors.badRequest("Invalid token address format.");
         }
-        const tokenInfo = await getTokenInfo(provider, tokenAddress);
+        // Parallel token metadata + balance for lower latency
+        const [tokenInfo, balance] = await Promise.all([
+          getTokenInfo(provider, tokenAddress),
+          getTokenBalance(provider, tokenAddress, address),
+        ]);
         tokenInfo.chain = chain;
-        const balance = await getTokenBalance(provider, tokenAddress, address);
         const result = formatBalance(chain, tokenInfo, balance);
         return createJsonResponse(result, 200);
       }
@@ -610,22 +658,42 @@ router.post(
           "Missing required fields: chain, tokenAddress, to, amount"
         );
       }
-      if (!isValidEthereumAddress(body.tokenAddress)) {
+      // Early rejects before wallet derivation / RPC
+      if (!isValidEthereumAddress(body.tokenAddress, { allowZero: true })) {
         return Errors.badRequest("Invalid token address format.");
+      }
+      if (!isValidEthereumAddress(body.to)) {
+        return Errors.badRequest(
+          "Invalid recipient address format (zero address rejected)."
+        );
+      }
+      const amountParsed = parsePositiveAmount(body.amount);
+      if (!amountParsed.ok) {
+        return Errors.badRequest(amountParsed.reason);
+      }
+      if (amountParsed.value === 0n) {
+        return Errors.badRequest("Transfer amount must be positive");
       }
 
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
-      // body.chain is validated non-undefined by guard above
       const chain = body.chain!;
       const wallet = connectWallet(baseWallet, chain);
-      const amount = BigInt(body.amount);
+      const amount = amountParsed.value;
       await ensureConfigMigrated(env);
-      const config = await getConfig(env.CONFIG_KV);
+      const [config, maxGasGwei] = await Promise.all([
+        getConfig(env.CONFIG_KV),
+        loadMaxGasPriceGwei(env.CONFIG_KV),
+      ]);
 
-      if (!isValidEthereumAddress(body.to)) {
-        return Errors.badRequest("Invalid recipient address format.");
+      // Gas price trap (fail-closed when over limit)
+      const gasCheck = await checkGasPriceLimit({
+        provider: wallet.provider!,
+        maxGasPriceGwei: maxGasGwei,
+      });
+      if (!gasCheck.allowed) {
+        return Errors.forbidden(gasCheck.reason || "Gas price limit exceeded");
       }
 
       // Server-side USD pricing — ignore client valueUsd for enforcement
@@ -687,7 +755,10 @@ router.post(
       trackApiCall(env, ctx, "/transfer", 200);
       return createJsonResponse({ txHash, id: record.id }, 200);
     } catch (error: unknown) {
-      logger.error("Error in POST /transfer", { error });
+      // Never log secret-bearing error objects; stringify message only
+      logger.error("Error in POST /transfer", {
+        error: toError(error, "Unknown").message,
+      });
       return Errors.internal(error);
     }
   },
@@ -711,21 +782,37 @@ router.post(
           "Missing required fields: chain, tokenAddress, spender, amount"
         );
       }
-      if (!isValidEthereumAddress(body.tokenAddress)) {
+      if (!isValidEthereumAddress(body.tokenAddress, { allowZero: true })) {
         return Errors.badRequest("Invalid token address format.");
       }
       if (!isValidEthereumAddress(body.spender)) {
-        return Errors.badRequest("Invalid spender address format.");
+        return Errors.badRequest(
+          "Invalid spender address format (zero address rejected)."
+        );
+      }
+      const amountParsed = parsePositiveAmount(body.amount);
+      if (!amountParsed.ok) {
+        return Errors.badRequest(amountParsed.reason);
       }
 
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
-      // body.chain is validated non-undefined by guard above
       const chain = body.chain!;
       const wallet = connectWallet(baseWallet, chain);
       await ensureConfigMigrated(env);
-      const config = await getConfig(env.CONFIG_KV);
+      const [config, maxGasGwei] = await Promise.all([
+        getConfig(env.CONFIG_KV),
+        loadMaxGasPriceGwei(env.CONFIG_KV),
+      ]);
+
+      const gasCheck = await checkGasPriceLimit({
+        provider: wallet.provider!,
+        maxGasPriceGwei: maxGasGwei,
+      });
+      if (!gasCheck.allowed) {
+        return Errors.forbidden(gasCheck.reason || "Gas price limit exceeded");
+      }
 
       // C5: approvals previously skipped all security policy checks.
       const approvalCheck = await validateApproval({
@@ -744,7 +831,7 @@ router.post(
         );
       }
 
-      const amount = BigInt(body.amount);
+      const amount = amountParsed.value;
       const txHash = await approveToken(
         wallet,
         body.tokenAddress,
@@ -769,7 +856,9 @@ router.post(
       trackApiCall(env, ctx, "/approve", 200);
       return createJsonResponse({ txHash, id: record.id }, 200);
     } catch (error: unknown) {
-      logger.error("Error in POST /approve", { error });
+      logger.error("Error in POST /approve", {
+        error: toError(error, "Unknown").message,
+      });
       return Errors.internal(error);
     }
   },
@@ -801,22 +890,22 @@ router.get(
         return Errors.badRequest(`Unsupported chain: ${chain}`);
       }
       if (
-        !isValidEthereumAddress(tokenIn) ||
-        !isValidEthereumAddress(tokenOut)
+        !isValidEthereumAddress(tokenIn, { allowZero: true }) ||
+        !isValidEthereumAddress(tokenOut, { allowZero: true })
       ) {
         return Errors.badRequest("Invalid token address format.");
       }
+      const amountParsed = parsePositiveAmount(amountIn);
+      if (!amountParsed.ok) {
+        return Errors.badRequest(amountParsed.reason);
+      }
 
       const provider = getReadOnlyProvider(chain);
-      const quote = await getQuote(
-        provider,
-        chain,
-        tokenIn,
-        tokenOut,
-        BigInt(amountIn)
-      );
-
-      const tokenInfo = await getTokenInfo(provider, tokenOut);
+      // Parallel quote + tokenOut metadata
+      const [quote, tokenInfo] = await Promise.all([
+        getQuote(provider, chain, tokenIn, tokenOut, amountParsed.value),
+        getTokenInfo(provider, tokenOut),
+      ]);
       const formatted = formatBalance(chain, tokenInfo, quote);
 
       return createJsonResponse(
@@ -854,21 +943,36 @@ router.post(
           "Missing required fields: chain, tokenIn, tokenOut, amountIn"
         );
       }
+      // Native zero address allowed for tokenIn/tokenOut (ETH sentinel)
       if (
-        !isValidEthereumAddress(body.tokenIn) ||
-        !isValidEthereumAddress(body.tokenOut)
+        !isValidEthereumAddress(body.tokenIn, { allowZero: true }) ||
+        !isValidEthereumAddress(body.tokenOut, { allowZero: true })
       ) {
         return Errors.badRequest("Invalid token address format.");
+      }
+      if (body.recipient && !isValidEthereumAddress(body.recipient)) {
+        return Errors.badRequest(
+          "Invalid recipient address format (zero address rejected)."
+        );
+      }
+      const amountParsed = parsePositiveAmount(body.amountIn);
+      if (!amountParsed.ok) {
+        return Errors.badRequest(amountParsed.reason);
+      }
+      if (amountParsed.value === 0n) {
+        return Errors.badRequest("amountIn must be positive");
       }
 
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
-      // body.chain is validated non-undefined by guard above
       const chain = body.chain!;
       const wallet = connectWallet(baseWallet, chain);
       await ensureConfigMigrated(env);
-      const config = await getConfig(env.CONFIG_KV);
+      const [config, maxGasGwei] = await Promise.all([
+        getConfig(env.CONFIG_KV),
+        loadMaxGasPriceGwei(env.CONFIG_KV),
+      ]);
 
       const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
       const routerAddr = chainConfig?.dexRouterAddress;
@@ -878,13 +982,16 @@ router.post(
         );
       }
 
-      // Server-side USD pricing of the input amount (ignore client valueUsd)
-      let amountInRaw: bigint;
-      try {
-        amountInRaw = BigInt(body.amountIn);
-      } catch {
-        return Errors.badRequest("Invalid amountIn");
+      const gasCheck = await checkGasPriceLimit({
+        provider: wallet.provider!,
+        maxGasPriceGwei: maxGasGwei,
+      });
+      if (!gasCheck.allowed) {
+        return Errors.forbidden(gasCheck.reason || "Gas price limit exceeded");
       }
+
+      // Server-side USD pricing of the input amount (ignore client valueUsd)
+      const amountInRaw = amountParsed.value;
       const priced = await resolveEnforcedValueUsd({
         chain,
         tokenAddress: body.tokenIn,
@@ -955,7 +1062,9 @@ router.post(
       trackApiCall(env, ctx, "/swap", 200);
       return createJsonResponse({ txHash, id: record.id }, 200);
     } catch (error: unknown) {
-      logger.error("Error in POST /swap", { error });
+      logger.error("Error in POST /swap", {
+        error: toError(error, "Unknown").message,
+      });
       return Errors.internal(error);
     }
   },
