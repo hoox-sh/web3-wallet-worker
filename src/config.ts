@@ -107,6 +107,34 @@ export function getChainConfig(chain: ChainName): ChainConfig {
   return { ...config };
 }
 
+/** KV key holding a per-chain RPC URL override: `wallet:rpc:<chain>`. */
+export function getChainRpcKvKey(chain: ChainName): string {
+  return `wallet:rpc:${chain}`;
+}
+
+/** Env var holding a per-chain RPC URL override: `RPC_URL_<CHAIN>`. */
+export function getChainRpcEnvKey(chain: ChainName): string {
+  return `RPC_URL_${chain.toUpperCase()}`;
+}
+
+/**
+ * Load a per-chain RPC URL override from KV. Returns null when unset.
+ * Never throws — callers fall through to env/static defaults.
+ */
+export async function loadChainRpcUrl(
+  kv: KVNamespace | undefined,
+  chain: ChainName
+): Promise<string | null> {
+  if (!kv) return null;
+  try {
+    const raw = await kv.get(getChainRpcKvKey(chain));
+    if (!raw || raw.trim() === "") return null;
+    return raw.trim();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Extract DEX config from wallet config.
  */

@@ -54,12 +54,28 @@ export function isSafeRpcUrl(rpcUrl: string): boolean {
 
 /**
  * Get a read-only JsonRpcProvider for the given chain.
- * RPC URLs should be set in KV config per chain.
+ *
+ * RPC resolution order (first safe value wins):
+ *  1. `opts.rpcUrl` — per-request override resolved by the caller from
+ *     `RPC_URL_<CHAIN>` env / `wallet:rpc:<chain>` KV (see config.ts).
+ *  2. Static `rpcUrl` in DEFAULT_CHAIN_CONFIGS (currently empty placeholders).
+ *
+ * There is intentionally NO global fallback: using one Ethereum endpoint for
+ * every chain silently returns wrong-chain data. Callers must configure a
+ * per-chain URL; otherwise this throws fail-closed.
  * Providers are cached per RPC URL to avoid repeated DNS resolution.
  */
-export function getReadOnlyProvider(chain: ChainName): ethers.JsonRpcProvider {
+export function getReadOnlyProvider(
+  chain: ChainName,
+  opts: { rpcUrl?: string } = {}
+): ethers.JsonRpcProvider {
   const config = getChainConfig(chain);
-  const rpcUrl = config.rpcUrl || "https://eth.llamarpc.com"; // fallback
+  const rpcUrl = opts.rpcUrl || config.rpcUrl;
+  if (!rpcUrl) {
+    throw new Error(
+      `No RPC URL configured for chain: ${chain}. Set wallet:rpc:${chain} in CONFIG_KV or RPC_URL_${chain.toUpperCase()} env.`
+    );
+  }
   if (!isSafeRpcUrl(rpcUrl)) {
     throw new Error(`Unsafe or invalid RPC URL for chain: ${chain}`);
   }
@@ -78,8 +94,11 @@ export function getReadOnlyProvider(chain: ChainName): ethers.JsonRpcProvider {
 /**
  * Get a signer-connected provider (wallet + provider) for the given chain.
  */
-export function getProvider(chain: ChainName): ethers.JsonRpcProvider {
-  return getReadOnlyProvider(chain);
+export function getProvider(
+  chain: ChainName,
+  opts: { rpcUrl?: string } = {}
+): ethers.JsonRpcProvider {
+  return getReadOnlyProvider(chain, opts);
 }
 
 /**
@@ -106,8 +125,9 @@ export function getWallet(secret: string): ethers.Wallet {
  */
 export function connectWallet(
   wallet: ethers.Wallet,
-  chain: ChainName
+  chain: ChainName,
+  opts: { rpcUrl?: string } = {}
 ): ethers.Wallet {
-  const provider = getProvider(chain);
+  const provider = getProvider(chain, opts);
   return wallet.connect(provider) as ethers.Wallet;
 }

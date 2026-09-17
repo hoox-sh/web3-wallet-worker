@@ -9,7 +9,12 @@
 
 import { ethers } from "ethers";
 import { z } from "zod/v4";
-import { getConfig, updateConfig } from "./config";
+import {
+  getConfig,
+  updateConfig,
+  loadChainRpcUrl,
+  getChainRpcEnvKey,
+} from "./config";
 import { getReadOnlyProvider, connectWallet } from "./providers";
 import {
   getNativeBalance,
@@ -20,7 +25,11 @@ import {
   transferToken,
 } from "./tokens";
 import { getQuote, executeSwap } from "./dex";
-import { storeTransaction, listTransactions } from "./transactions";
+import {
+  storeTransaction,
+  listTransactions,
+  initTransactionsTable,
+} from "./transactions";
 import {
   validateOutgoingTransfer,
   validateSwapTransaction,
@@ -76,6 +85,13 @@ export interface Env extends AnalyticsEnv, InternalAuthEnv {
   // Wrangler secret bindings (created via `wrangler secret put`).
   WALLET_PK_SECRET?: string;
   WALLET_MNEMONIC_SECRET?: string;
+  // Per-chain RPC URL overrides (env fallback; KV wallet:rpc:<chain> wins).
+  // Set via `wrangler secret put RPC_URL_ETHEREUM` etc. or plain vars.
+  RPC_URL_ETHEREUM?: string;
+  RPC_URL_BSC?: string;
+  RPC_URL_POLYGON?: string;
+  RPC_URL_ARBITRUM?: string;
+  RPC_URL_OPTIMISM?: string;
   // Service bindings (see wrangler.jsonc services block).
   TELEGRAM_SERVICE: Fetcher;
   ANALYTICS_SERVICE: Fetcher;
@@ -195,6 +211,69 @@ async function loadMaxGasPriceGwei(
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve the RPC URL for a chain.
+ * Order: KV `wallet:rpc:<chain>` → `RPC_URL_<CHAIN>` env → static default.
+ * Returns undefined when nothing is configured (provider throws fail-closed).
+ */
+async function loadRpcUrlForChain(
+  env: Env,
+  chain: ChainName
+): Promise<string | undefined> {
+  try {
+    const kvUrl = await loadChainRpcUrl(env.CONFIG_KV, chain);
+    if (kvUrl) return kvUrl;
+  } catch {
+    // fall through to env
+  }
+  const envKey = getChainRpcEnvKey(chain);
+  const envUrl = (env as unknown as Record<string, unknown>)[envKey];
+  if (typeof envUrl === "string" && envUrl.trim() !== "") return envUrl.trim();
+  return DEFAULT_CHAIN_CONFIGS[chain]?.rpcUrl || undefined;
+}
+
+/** Max swap deadline skew: 30 minutes into the future (MEV / stale-quote cap). */
+const MAX_SWAP_DEADLINE_SKEW_S = 1800;
+/** Default swap deadline when the client omits it: 20 minutes. */
+const DEFAULT_SWAP_DEADLINE_SKEW_S = 1200;
+
+/**
+ * Validate a client-supplied swap deadline (unix seconds).
+ * Returns null when valid/absent (caller applies default), else an error string.
+ */
+function validateSwapDeadline(deadline: number | undefined): string | null {
+  if (deadline === undefined) return null;
+  if (!Number.isInteger(deadline) || deadline <= 0) {
+    return "Invalid deadline (must be a positive unix timestamp)";
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (deadline <= now) return "Invalid deadline (must be in the future)";
+  if (deadline > now + MAX_SWAP_DEADLINE_SKEW_S) {
+    return `Invalid deadline (must be within ${MAX_SWAP_DEADLINE_SKEW_S / 60} minutes)`;
+  }
+  return null;
+}
+
+/** In-flight D1 table init guard (one CREATE TABLE IF NOT EXISTS per isolate). */
+let transactionsTablePromise: Promise<void> | null = null;
+
+/**
+ * Ensure `wallet_transactions` exists before store/list.
+ * Idempotent; failures throw so callers return 500 instead of a
+ * confusing `no such table` D1 error on fresh databases.
+ */
+async function ensureTransactionsTable(env: Env): Promise<void> {
+  if (!transactionsTablePromise) {
+    transactionsTablePromise = initTransactionsTable(env.TRANSACTIONS_DB).catch(
+      (err) => {
+        transactionsTablePromise = null;
+        throw err;
+      }
+    );
+  }
+  return transactionsTablePromise;
 }
 
 /**
@@ -589,7 +668,7 @@ router.get(
   "/balance",
   async (
     request: Request,
-    _env: Env,
+    env: Env,
     _ctx: ExecutionContext
   ): Promise<Response> => {
     try {
@@ -604,7 +683,13 @@ router.get(
         return Errors.badRequest(`Unsupported chain: ${chain}`);
       }
 
-      const provider = getReadOnlyProvider(chain);
+      const rpcUrl = await loadRpcUrlForChain(env, chain);
+      let provider: ethers.JsonRpcProvider;
+      try {
+        provider = getReadOnlyProvider(chain, { rpcUrl });
+      } catch (err) {
+        return Errors.badRequest(toError(err, "RPC not configured"));
+      }
 
       if (!isValidEthereumAddress(address, { allowZero: true })) {
         return Errors.badRequest("Invalid address format.");
@@ -680,7 +765,13 @@ router.post(
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
       const chain = body.chain!;
-      const wallet = connectWallet(baseWallet, chain);
+      const rpcUrl = await loadRpcUrlForChain(env, chain);
+      let wallet: ethers.Wallet;
+      try {
+        wallet = connectWallet(baseWallet, chain, { rpcUrl });
+      } catch (err) {
+        return Errors.badRequest(toError(err, "RPC not configured"));
+      }
       const amount = amountParsed.value;
       await ensureConfigMigrated(env);
       const [config, maxGasGwei] = await Promise.all([
@@ -702,6 +793,7 @@ router.post(
         chain,
         tokenAddress: body.tokenAddress,
         amountRaw: amount,
+        rpcUrl,
       });
       if (!priced.ok) {
         return Errors.forbidden(priced.reason);
@@ -751,6 +843,7 @@ router.post(
         tokenAddress: body.tokenAddress,
         createdAt: Date.now(),
       };
+      await ensureTransactionsTable(env);
       await storeTransaction(env.TRANSACTIONS_DB, record);
 
       trackApiCall(env, ctx, "/transfer", 200);
@@ -800,7 +893,13 @@ router.post(
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
       const chain = body.chain!;
-      const wallet = connectWallet(baseWallet, chain);
+      const rpcUrl = await loadRpcUrlForChain(env, chain);
+      let wallet: ethers.Wallet;
+      try {
+        wallet = connectWallet(baseWallet, chain, { rpcUrl });
+      } catch (err) {
+        return Errors.badRequest(toError(err, "RPC not configured"));
+      }
       await ensureConfigMigrated(env);
       const [config, maxGasGwei] = await Promise.all([
         getConfig(env.CONFIG_KV),
@@ -852,6 +951,7 @@ router.post(
         tokenAddress: body.tokenAddress,
         createdAt: Date.now(),
       };
+      await ensureTransactionsTable(env);
       await storeTransaction(env.TRANSACTIONS_DB, record);
 
       trackApiCall(env, ctx, "/approve", 200);
@@ -872,7 +972,7 @@ router.get(
   "/quote",
   async (
     request: Request,
-    _env: Env,
+    env: Env,
     _ctx: ExecutionContext
   ): Promise<Response> => {
     try {
@@ -901,7 +1001,13 @@ router.get(
         return Errors.badRequest(amountParsed.reason);
       }
 
-      const provider = getReadOnlyProvider(chain);
+      const rpcUrl = await loadRpcUrlForChain(env, chain);
+      let provider: ethers.JsonRpcProvider;
+      try {
+        provider = getReadOnlyProvider(chain, { rpcUrl });
+      } catch (err) {
+        return Errors.badRequest(toError(err, "RPC not configured"));
+      }
       // Parallel quote + tokenOut metadata
       const [quote, tokenInfo] = await Promise.all([
         getQuote(provider, chain, tokenIn, tokenOut, amountParsed.value),
@@ -964,11 +1070,20 @@ router.post(
         return Errors.badRequest("amountIn must be positive");
       }
 
+      const deadlineError = validateSwapDeadline(body.deadline);
+      if (deadlineError) return Errors.badRequest(deadlineError);
+
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
       const chain = body.chain!;
-      const wallet = connectWallet(baseWallet, chain);
+      const rpcUrl = await loadRpcUrlForChain(env, chain);
+      let wallet: ethers.Wallet;
+      try {
+        wallet = connectWallet(baseWallet, chain, { rpcUrl });
+      } catch (err) {
+        return Errors.badRequest(toError(err, "RPC not configured"));
+      }
       await ensureConfigMigrated(env);
       const [config, maxGasGwei] = await Promise.all([
         getConfig(env.CONFIG_KV),
@@ -997,6 +1112,7 @@ router.post(
         chain,
         tokenAddress: body.tokenIn,
         amountRaw: amountInRaw,
+        rpcUrl,
       });
       if (!priced.ok) {
         return Errors.forbidden(priced.reason);
@@ -1028,10 +1144,34 @@ router.post(
         );
       }
 
+      // Swap output recipient is a fund destination — apply the same
+      // transfer policy (whitelist + value cap). The wallet itself is
+      // always allowed; any third-party recipient must pass validation.
+      if (
+        body.recipient &&
+        body.recipient.toLowerCase() !== wallet.address.toLowerCase()
+      ) {
+        const recipientCheck = await validateOutgoingTransfer({
+          config,
+          to: body.recipient,
+          tokenAddress: body.tokenOut,
+          valueUsd,
+          chain,
+        });
+        if (!recipientCheck.allowed) {
+          return Errors.forbidden(
+            recipientCheck.reason || "Swap recipient not allowed by policy"
+          );
+        }
+      }
+
+      const effectiveDeadline =
+        body.deadline ??
+        Math.floor(Date.now() / 1000) + DEFAULT_SWAP_DEADLINE_SKEW_S;
       const txHash = await executeSwap(
         wallet,
         chain,
-        body as SwapRequest,
+        { ...(body as SwapRequest), deadline: effectiveDeadline },
         config
       );
 
@@ -1048,6 +1188,7 @@ router.post(
           body.tokenIn === ethers.ZeroAddress ? undefined : body.tokenIn,
         createdAt: Date.now(),
       };
+      await ensureTransactionsTable(env);
       await storeTransaction(env.TRANSACTIONS_DB, record);
 
       safeWaitUntil(
@@ -1086,13 +1227,30 @@ router.get(
       const chain = url.searchParams.get("chain") ?? undefined;
       const type = url.searchParams.get("type") ?? undefined;
       const status = url.searchParams.get("status") ?? undefined;
-      const limit = url.searchParams.get("limit")
-        ? parseInt(url.searchParams.get("limit")!, 10)
-        : 50;
-      const offset = url.searchParams.get("offset")
-        ? parseInt(url.searchParams.get("offset")!, 10)
-        : 0;
+      const limitRaw = url.searchParams.get("limit");
+      const offsetRaw = url.searchParams.get("offset");
+      const limit = limitRaw === null ? 50 : parseInt(limitRaw, 10);
+      const offset = offsetRaw === null ? 0 : parseInt(offsetRaw, 10);
 
+      if (chain !== undefined && !DEFAULT_CHAIN_CONFIGS[chain as ChainName]) {
+        return Errors.badRequest(`Unsupported chain: ${chain}`);
+      }
+      const TX_TYPES = new Set(["swap", "approve", "transfer", "wallet_init"]);
+      if (type !== undefined && !TX_TYPES.has(type)) {
+        return Errors.badRequest(`Unsupported type: ${type}`);
+      }
+      const TX_STATUSES = new Set(["pending", "confirmed", "failed"]);
+      if (status !== undefined && !TX_STATUSES.has(status)) {
+        return Errors.badRequest(`Unsupported status: ${status}`);
+      }
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        return Errors.badRequest("Invalid limit (must be 1-100)");
+      }
+      if (!Number.isInteger(offset) || offset < 0) {
+        return Errors.badRequest("Invalid offset (must be >= 0)");
+      }
+
+      await ensureTransactionsTable(env);
       const txs = await listTransactions(env.TRANSACTIONS_DB, {
         chain,
         type,

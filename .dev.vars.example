@@ -5,8 +5,15 @@
 # Internal auth key for service-to-service authentication
 INTERNAL_KEY_BINDING=your_internal_key_binding_here
 
-# JSON-encoded wallet private key (for production, use wrangler secret put)
-# WALLET_PK_SECRET={"PRIVATE_KEY": "0xabcdef123456...7890"}
+# Raw hex private key: optional 0x + 64 hex chars (for production, use wrangler secret put)
+# WALLET_PK_SECRET=0xabcdef123456...7890
 
-# JSON-encoded wallet mnemonic phrase (for production, use wrangler secret put)
-# WALLET_MNEMONIC_SECRET={"MNEMONIC_PHRASE": "word1 word2 ... word12"}
+# Raw BIP-39 mnemonic phrase, space-separated 12-24 words (use wrangler secret put in prod)
+# WALLET_MNEMONIC_SECRET=word1 word2 ... word12
+
+# Per-chain RPC URLs (or set wallet:rpc:<chain> in CONFIG_KV instead)
+# RPC_URL_ETHEREUM=https://eth.llamarpc.com
+# RPC_URL_BSC=
+# RPC_URL_POLYGON=
+# RPC_URL_ARBITRUM=
+# RPC_URL_OPTIMISM=

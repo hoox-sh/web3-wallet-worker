@@ -22,20 +22,34 @@ import {
 describe("Provider Factory", () => {
   describe("getReadOnlyProvider", () => {
     it("should return a provider for a configured chain", () => {
-      const provider = getReadOnlyProvider("ethereum");
+      const provider = getReadOnlyProvider("ethereum", {
+        rpcUrl: "https://eth.llamarpc.com",
+      });
       expect(provider).toBeDefined();
     });
 
     it("should return different providers for different chains", () => {
-      const eth = getReadOnlyProvider("ethereum");
-      const bsc = getReadOnlyProvider("bsc");
+      const eth = getReadOnlyProvider("ethereum", {
+        rpcUrl: "https://eth.llamarpc.com",
+      });
+      const bsc = getReadOnlyProvider("bsc", {
+        rpcUrl: "https://bsc-dataseed.binance.org",
+      });
       expect(eth).not.toBe(bsc);
+    });
+
+    it("should throw fail-closed when no RPC URL is configured", () => {
+      expect(() => getReadOnlyProvider("ethereum")).toThrow(
+        /No RPC URL configured/
+      );
     });
   });
 
   describe("getProvider", () => {
     it("should return a provider for valid chain", () => {
-      const provider = getProvider("ethereum");
+      const provider = getProvider("ethereum", {
+        rpcUrl: "https://eth.llamarpc.com",
+      });
       expect(provider).toBeDefined();
     });
   });
@@ -82,7 +96,9 @@ describe("Provider Factory", () => {
   describe("connectWallet", () => {
     it("attaches a provider to a wallet", () => {
       const wallet = getWallet(TEST_PRIVATE_KEY);
-      const connected = connectWallet(wallet, "ethereum");
+      const connected = connectWallet(wallet, "ethereum", {
+        rpcUrl: "https://eth.llamarpc.com",
+      });
       expect(connected.provider).toBeDefined();
       expect(connected.address).toBe(TEST_WALLET_ADDRESS);
     });

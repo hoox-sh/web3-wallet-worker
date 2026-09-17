@@ -12,6 +12,22 @@ import { DEFAULT_CHAIN_CONFIGS, DEX_ROUTER_ABI } from "./constants";
 import { getTokenInfo } from "./tokens";
 import { getReadOnlyProvider } from "./providers";
 
+/** Known stablecoin decimals for RPC-less fallback (USDT/USDC 6, DAI 18). */
+const STABLECOIN_DECIMALS: Record<string, number> = {
+  "0xdac17f958d2ee523a2206206994597c13d831ec7": 6,
+  "0x55d398326f99059ff775485246999027b3197955": 6,
+  "0xc2132d05d31c914a87c6611c10748aeb04b58e8f": 6,
+  "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9": 6,
+  "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": 6,
+  "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": 6,
+  "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359": 6,
+  "0xaf88d065e77c8cc2239327c5edb3a432268e5831": 6,
+  "0x0b2c639c533813f4aa9d7837caf62653d097ff85": 6,
+  "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58": 6,
+  "0x6b175474e89094c44da98b954eedeac495271d0f": 18,
+  "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3": 18,
+};
+
 /** Well-known USD stablecoins (1:1 for limit enforcement). */
 const STABLECOIN_ADDRESSES = new Set(
   [
@@ -102,7 +118,8 @@ async function fetchBinancePriceUsd(pair: string): Promise<number | null> {
 async function quoteTokenToStableUsd(
   chain: ChainName,
   tokenAddress: string,
-  amountRaw: bigint
+  amountRaw: bigint,
+  rpcUrl?: string
 ): Promise<number | null> {
   const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
   const routerAddr = chainConfig?.dexRouterAddress;
@@ -122,7 +139,7 @@ async function quoteTokenToStableUsd(
   if (cached && Date.now() < cached.expiresAt) return cached.usd;
 
   try {
-    const provider = getReadOnlyProvider(chain);
+    const provider = getReadOnlyProvider(chain, { rpcUrl });
     const router = new ethers.Contract(routerAddr, DEX_ROUTER_ABI, provider);
     const tokenIn = ethers.getAddress(tokenAddress);
     const wrapped = ethers.getAddress(wNative);
@@ -202,8 +219,9 @@ export async function estimateTokenValueUsd(params: {
   chain: ChainName;
   tokenAddress: string;
   amountRaw: bigint;
+  rpcUrl?: string;
 }): Promise<ValueEstimate> {
-  const { chain, tokenAddress, amountRaw } = params;
+  const { chain, tokenAddress, amountRaw, rpcUrl } = params;
   const addr = tokenAddress.toLowerCase();
   const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
   const wrapped = chainConfig?.wrappedNativeAddress?.toLowerCase();
@@ -232,10 +250,12 @@ export async function estimateTokenValueUsd(params: {
     };
   }
 
-  // Stablecoins
+  // Stablecoins (1:1). Prefer on-chain decimals, but fall back to the
+  // known-decimals table so policy checks work even when no RPC is
+  // configured or the RPC is down.
   if (STABLECOIN_ADDRESSES.has(addr)) {
     try {
-      const provider = getReadOnlyProvider(chain);
+      const provider = getReadOnlyProvider(chain, { rpcUrl });
       const info = await getTokenInfo(provider, tokenAddress);
       const amountHuman = Number(ethers.formatUnits(amountRaw, info.decimals));
       return {
@@ -245,16 +265,36 @@ export async function estimateTokenValueUsd(params: {
         amountHuman,
       };
     } catch {
-      // Fall through
+      const fallbackDecimals = STABLECOIN_DECIMALS[addr] ?? 18;
+      try {
+        const amountHuman = Number(
+          ethers.formatUnits(amountRaw, fallbackDecimals)
+        );
+        if (Number.isFinite(amountHuman) && amountHuman >= 0) {
+          return {
+            valueUsd: amountHuman,
+            source: "stablecoin",
+            decimals: fallbackDecimals,
+            amountHuman,
+          };
+        }
+      } catch {
+        // Fall through to unavailable
+      }
     }
   }
 
   // ERC-20 via DEX quote → stable
   try {
-    const provider = getReadOnlyProvider(chain);
+    const provider = getReadOnlyProvider(chain, { rpcUrl });
     const info = await getTokenInfo(provider, tokenAddress);
     const amountHuman = Number(ethers.formatUnits(amountRaw, info.decimals));
-    const dexUsd = await quoteTokenToStableUsd(chain, tokenAddress, amountRaw);
+    const dexUsd = await quoteTokenToStableUsd(
+      chain,
+      tokenAddress,
+      amountRaw,
+      rpcUrl
+    );
     if (dexUsd !== null && dexUsd > 0) {
       return {
         valueUsd: dexUsd,
@@ -287,6 +327,7 @@ export async function resolveEnforcedValueUsd(params: {
   chain: ChainName;
   tokenAddress: string;
   amountRaw: bigint;
+  rpcUrl?: string;
 }): Promise<
   | { ok: true; valueUsd: number; source: ValueEstimate["source"] }
   | { ok: false; reason: string }

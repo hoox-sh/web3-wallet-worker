@@ -11,9 +11,19 @@
 interface __BaseEnv_Env {
   WALLET_MNEMONIC_SECRET: string;
   WALLET_PK_SECRET: string;
+  INTERNAL_KEY_BINDING: string;
+  WALLET_EXECUTE_KEY_BINDING: string;
+  TELEGRAM_INTERNAL_KEY_BINDING: string;
+  RPC_URL_ETHEREUM: string;
+  RPC_URL_BSC: string;
+  RPC_URL_POLYGON: string;
+  RPC_URL_ARBITRUM: string;
+  RPC_URL_OPTIMISM: string;
   TELEGRAM_SERVICE: Fetcher /* telegram-worker */;
+  ANALYTICS_SERVICE: Fetcher /* analytics-worker */;
   CONFIG_KV: KVNamespace;
   WALLET_CONFIG_KV: KVNamespace;
+  TRANSACTIONS_DB: D1Database;
 }
 declare namespace Cloudflare {
   interface GlobalProps {
