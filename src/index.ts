@@ -29,6 +29,7 @@ import {
   storeTransaction,
   listTransactions,
   initTransactionsTable,
+  getTransaction,
 } from "./transactions";
 import {
   validateOutgoingTransfer,
@@ -274,6 +275,49 @@ async function ensureTransactionsTable(env: Env): Promise<void> {
     );
   }
   return transactionsTablePromise;
+}
+
+/** Client-supplied idempotency keys: opaque, URL/header-safe, max 128 chars. */
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Parse and validate the `Idempotency-Key` header for mutating routes.
+ * Returns `{ key }` when present and valid, `{ key: undefined }` when absent,
+ * or an error string when malformed (caller returns 400).
+ */
+function parseIdempotencyKey(request: Request): {
+  key?: string;
+  error?: string;
+} {
+  const raw = request.headers.get("Idempotency-Key");
+  if (raw === null || raw === "") return {};
+  const key = raw.trim();
+  if (!IDEMPOTENCY_KEY_RE.test(key)) {
+    return {
+      error:
+        "Invalid Idempotency-Key (1-128 chars: letters, digits, -, _ only)",
+    };
+  }
+  return { key };
+}
+
+/**
+ * Replay guard for mutating routes. When the client supplies an
+ * `Idempotency-Key` already present in D1, the original result is returned
+ * without signing a second transaction. Callers must run
+ * `ensureTransactionsTable` first.
+ */
+async function checkIdempotencyReplay(
+  env: Env,
+  key: string | undefined
+): Promise<Response | null> {
+  if (!key) return null;
+  const existing = await getTransaction(env.TRANSACTIONS_DB, key);
+  if (!existing) return null;
+  return createJsonResponse(
+    { txHash: existing.txHash, id: existing.id, deduped: true },
+    200
+  );
 }
 
 /**
@@ -760,6 +804,17 @@ router.post(
       if (amountParsed.value === 0n) {
         return Errors.badRequest("Transfer amount must be positive");
       }
+      if (!DEFAULT_CHAIN_CONFIGS[body.chain!]?.enabled) {
+        return Errors.forbidden(`Chain not enabled: ${body.chain}`);
+      }
+
+      // Idempotency: replay short-circuits before any wallet/RPC work.
+      const { key: idempotencyKey, error: idempotencyError } =
+        parseIdempotencyKey(request);
+      if (idempotencyError) return Errors.badRequest(idempotencyError);
+      await ensureTransactionsTable(env);
+      const replay = await checkIdempotencyReplay(env, idempotencyKey);
+      if (replay) return replay;
 
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
@@ -832,7 +887,7 @@ router.post(
       );
 
       const record: TransactionRecord = {
-        id: crypto.randomUUID(),
+        id: idempotencyKey ?? crypto.randomUUID(),
         chain: body.chain,
         txHash,
         type: "transfer",
@@ -843,7 +898,6 @@ router.post(
         tokenAddress: body.tokenAddress,
         createdAt: Date.now(),
       };
-      await ensureTransactionsTable(env);
       await storeTransaction(env.TRANSACTIONS_DB, record);
 
       trackApiCall(env, ctx, "/transfer", 200);
@@ -887,6 +941,18 @@ router.post(
       const amountParsed = parsePositiveAmount(body.amount);
       if (!amountParsed.ok) {
         return Errors.badRequest(amountParsed.reason);
+      }
+
+      // Idempotency: replay short-circuits before any wallet/RPC work.
+      const { key: idempotencyKey, error: idempotencyError } =
+        parseIdempotencyKey(request);
+      if (idempotencyError) return Errors.badRequest(idempotencyError);
+      await ensureTransactionsTable(env);
+      const replay = await checkIdempotencyReplay(env, idempotencyKey);
+      if (replay) return replay;
+
+      if (!DEFAULT_CHAIN_CONFIGS[body.chain!]!.enabled) {
+        return Errors.forbidden(`Chain not enabled: ${body.chain}`);
       }
 
       const walletResult = createWalletFromEnv(env);
@@ -940,7 +1006,7 @@ router.post(
       );
 
       const record: TransactionRecord = {
-        id: crypto.randomUUID(),
+        id: idempotencyKey ?? crypto.randomUUID(),
         chain,
         txHash,
         type: "approve",
@@ -951,7 +1017,6 @@ router.post(
         tokenAddress: body.tokenAddress,
         createdAt: Date.now(),
       };
-      await ensureTransactionsTable(env);
       await storeTransaction(env.TRANSACTIONS_DB, record);
 
       trackApiCall(env, ctx, "/approve", 200);
@@ -1073,6 +1138,18 @@ router.post(
       const deadlineError = validateSwapDeadline(body.deadline);
       if (deadlineError) return Errors.badRequest(deadlineError);
 
+      // Idempotency: replay short-circuits before any wallet/RPC work.
+      const { key: idempotencyKey, error: idempotencyError } =
+        parseIdempotencyKey(request);
+      if (idempotencyError) return Errors.badRequest(idempotencyError);
+      await ensureTransactionsTable(env);
+      const replay = await checkIdempotencyReplay(env, idempotencyKey);
+      if (replay) return replay;
+
+      if (!DEFAULT_CHAIN_CONFIGS[body.chain!]!.enabled) {
+        return Errors.forbidden(`Chain not enabled: ${body.chain}`);
+      }
+
       const walletResult = createWalletFromEnv(env);
       if (walletResult instanceof Response) return walletResult;
       const baseWallet = walletResult.wallet;
@@ -1176,7 +1253,7 @@ router.post(
       );
 
       const record: TransactionRecord = {
-        id: crypto.randomUUID(),
+        id: idempotencyKey ?? crypto.randomUUID(),
         chain,
         txHash,
         type: "swap",
@@ -1188,7 +1265,6 @@ router.post(
           body.tokenIn === ethers.ZeroAddress ? undefined : body.tokenIn,
         createdAt: Date.now(),
       };
-      await ensureTransactionsTable(env);
       await storeTransaction(env.TRANSACTIONS_DB, record);
 
       safeWaitUntil(

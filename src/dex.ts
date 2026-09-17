@@ -14,6 +14,35 @@ import { getChainConfig } from "./config";
 const NATIVE_TOKEN = ethers.ZeroAddress;
 
 /**
+ * Scale current network fees by the configured gas multiplier (default 1.2).
+ * Returns EIP-1559 overrides, or `{}` when fees are unreadable or the
+ * multiplier is <= 1 (node defaults apply). Never throws.
+ */
+async function buildGasOverrides(
+  provider: ethers.Provider,
+  multiplier: number
+): Promise<ethers.TransactionRequest> {
+  if (!(multiplier > 1) || !Number.isFinite(multiplier)) return {};
+  try {
+    const fee = await provider.getFeeData();
+    const maxFee = fee.maxFeePerGas;
+    if (maxFee === null || maxFee === undefined) return {};
+    const factor = BigInt(Math.round(multiplier * 100));
+    const scale = (v: bigint) => (v * factor) / 100n;
+    const overrides: ethers.TransactionRequest = {
+      maxFeePerGas: scale(maxFee),
+    };
+    const prio = fee.maxPriorityFeePerGas;
+    if (prio !== null && prio !== undefined) {
+      overrides.maxPriorityFeePerGas = scale(prio);
+    }
+    return overrides;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Get a swap quote from the DEX router.
  * Returns the expected output amount in wei.
  */
@@ -34,7 +63,8 @@ export async function getQuote(
   const path = buildPath(chain, tokenIn, tokenOut);
 
   const getAmountsOut = router.getAmountsOut;
-  if (!getAmountsOut) throw new Error("Router getAmountsOut method unavailable");
+  if (!getAmountsOut)
+    throw new Error("Router getAmountsOut method unavailable");
   const amounts: bigint[] = await getAmountsOut(amountIn, path);
   const out = amounts[amounts.length - 1];
   if (out === undefined) throw new Error("Empty amounts from getAmountsOut");
@@ -85,6 +115,10 @@ export async function executeSwap(
   const deadline = request.deadline ?? Math.floor(Date.now() / 1000) + 1200; // 20 min
 
   const router = new ethers.Contract(routerAddr, DEX_ROUTER_ABI, wallet);
+  const gasOverrides = await buildGasOverrides(
+    provider,
+    config.dex.gasMultiplier
+  );
 
   let tx: ethers.TransactionResponse;
 
@@ -94,15 +128,10 @@ export async function executeSwap(
     if (!swapExactETHForTokens) {
       throw new Error("Router swapExactETHForTokens method unavailable");
     }
-    tx = await swapExactETHForTokens(
-      minAmountOut,
-      path,
-      recipient,
-      deadline,
-      {
-        value: BigInt(request.amountIn),
-      }
-    );
+    tx = await swapExactETHForTokens(minAmountOut, path, recipient, deadline, {
+      value: BigInt(request.amountIn),
+      ...gasOverrides,
+    });
   } else {
     // Token in: need approval first
     await checkAllowanceAndApprove(
@@ -124,7 +153,8 @@ export async function executeSwap(
         minAmountOut,
         path,
         recipient,
-        deadline
+        deadline,
+        gasOverrides
       );
     } else {
       // Token → Token: swapExactTokensForTokens
@@ -137,7 +167,8 @@ export async function executeSwap(
         minAmountOut,
         path,
         recipient,
-        deadline
+        deadline,
+        gasOverrides
       );
     }
   }
@@ -168,10 +199,7 @@ export async function checkAllowanceAndApprove(
   const contract = new ethers.Contract(checksummedToken, ERC20_ABI, provider);
   const allowanceFn = contract.allowance;
   if (!allowanceFn) throw new Error("ERC20 allowance method unavailable");
-  const currentAllowance: bigint = await allowanceFn(
-    owner,
-    checksummedSpender
-  );
+  const currentAllowance: bigint = await allowanceFn(owner, checksummedSpender);
 
   if (currentAllowance >= amount) {
     return null; // Allowance is sufficient

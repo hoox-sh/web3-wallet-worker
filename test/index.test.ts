@@ -483,6 +483,143 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     expect(res.status).toBe(404);
   });
 
+  // ── Chain-enabled guard ──
+
+  it("POST /transfer rejects disabled chain with 403", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/transfer", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+      },
+      body: JSON.stringify({
+        chain: "optimism",
+        tokenAddress: "0x0000000000000000000000000000000000000000",
+        to: EXPECTED_ADDRESS_FROM_PK,
+        amount: "1",
+      }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(403);
+    const json: any = await res.json();
+    expect(String(json.error)).toMatch(/not enabled/i);
+  });
+
+  // ── Idempotency-Key ──
+
+  it("POST /transfer rejects malformed Idempotency-Key with 400", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/transfer", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+        "Idempotency-Key": "not valid!!",
+      },
+      body: JSON.stringify({
+        chain: "ethereum",
+        tokenAddress: "0x0000000000000000000000000000000000000000",
+        to: EXPECTED_ADDRESS_FROM_PK,
+        amount: "1",
+      }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(400);
+    const json: any = await res.json();
+    expect(String(json.error)).toMatch(/Idempotency-Key/i);
+  });
+
+  it("POST /transfer replays stored result on Idempotency-Key hit", async () => {
+    const stored = {
+      id: "replay-key-1",
+      chain: "ethereum",
+      txHash: "0xreplayed",
+      type: "transfer",
+      status: "pending",
+      from: EXPECTED_ADDRESS_FROM_PK,
+      to: EXPECTED_ADDRESS_FROM_PK,
+      value: "1",
+      createdAt: Date.now(),
+    };
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    (env as any).TRANSACTIONS_DB = {
+      prepare: vi.fn().mockReturnValue({
+        bind: vi.fn().mockReturnValue({
+          run: vi.fn().mockResolvedValue({ success: true }),
+          first: vi.fn().mockResolvedValue(stored),
+          all: vi.fn().mockResolvedValue({ results: [] }),
+        }),
+        run: vi.fn().mockResolvedValue({ success: true }),
+        first: vi.fn().mockResolvedValue(stored),
+        all: vi.fn().mockResolvedValue({ results: [] }),
+      }),
+    };
+    const req = new Request("http://localhost/transfer", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+        "Idempotency-Key": "replay-key-1",
+      },
+      body: JSON.stringify({
+        chain: "ethereum",
+        tokenAddress: "0x0000000000000000000000000000000000000000",
+        to: EXPECTED_ADDRESS_FROM_PK,
+        amount: "1",
+      }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(200);
+    const json: any = await res.json();
+    expect(json.txHash).toBe("0xreplayed");
+    expect(json.deduped).toBe(true);
+  });
+
+  // ── Swap deadline cap ──
+
+  it("POST /swap rejects far-future deadline with 400", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const farFuture = Math.floor(Date.now() / 1000) + 7200;
+    const req = new Request("http://localhost/swap", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+      },
+      body: JSON.stringify({
+        chain: "ethereum",
+        tokenIn: "0x0000000000000000000000000000000000000000",
+        tokenOut: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        amountIn: "1000000000000000000",
+        deadline: farFuture,
+      }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(400);
+    const json: any = await res.json();
+    expect(String(json.error)).toMatch(/deadline/i);
+  });
+
+  it("POST /swap rejects past deadline with 400", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/swap", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+      },
+      body: JSON.stringify({
+        chain: "ethereum",
+        tokenIn: "0x0000000000000000000000000000000000000000",
+        tokenOut: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        amountIn: "1000000000000000000",
+        deadline: 1,
+      }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBe(400);
+  });
 });
 
 // Restore original Response and Headers after all tests in this file
