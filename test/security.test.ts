@@ -96,6 +96,24 @@ describe("Security Validation", () => {
       expect(result.allowed).toBe(true);
     });
 
+    it("should allow Uniswap V3 SwapRouter02 without explicit whitelist", async () => {
+      const strictConfig = {
+        ...testWalletConfig,
+        security: {
+          ...testWalletConfig.security,
+          whitelistedContractsOnly: true,
+          whitelistedContracts: [],
+        },
+      };
+      const result = await validateTransaction({
+        config: strictConfig,
+        to: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+        valueUsd: 100,
+        chain: "ethereum",
+      });
+      expect(result.allowed).toBe(true);
+    });
+
     it("should reject non-positive valueUsd (client cannot understate to 0)", async () => {
       const result = await validateTransaction({
         config: testWalletConfig,

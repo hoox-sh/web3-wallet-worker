@@ -6,7 +6,11 @@
 // workers/web3-wallet-worker/src/security.ts
 
 import type { WalletConfig, ChainName, ValidationResult } from "./types";
-import { DEFAULT_CHAIN_CONFIGS } from "./constants";
+import {
+  DEFAULT_CHAIN_CONFIGS,
+  UNISWAP_V3_CHAINS,
+  UNISWAP_V3_SWAP_ROUTER_02,
+} from "./constants";
 
 /** Zero / burn address — never a valid transfer recipient or approve spender. */
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -32,6 +36,17 @@ export interface ValidationParams {
   to: string;
   valueUsd: number;
   chain: ChainName;
+}
+
+/** V2 per-chain router or Uniswap V3 SwapRouter02 on ethereum/arbitrum. */
+export function isKnownDexRouter(chain: ChainName, address: string): boolean {
+  const addr = address.toLowerCase();
+  const v2 = DEFAULT_CHAIN_CONFIGS[chain]?.dexRouterAddress?.toLowerCase();
+  if (v2 && v2 === addr) return true;
+  return (
+    UNISWAP_V3_CHAINS.includes(chain) &&
+    UNISWAP_V3_SWAP_ROUTER_02.toLowerCase() === addr
+  );
 }
 
 /**
@@ -152,9 +167,7 @@ export async function validateTransaction(
   }
 
   if (config.security.whitelistedContractsOnly) {
-    const chainConfig = DEFAULT_CHAIN_CONFIGS[params.chain];
-    const isDexRouter =
-      chainConfig?.dexRouterAddress?.toLowerCase() === to.toLowerCase();
+    const isDexRouter = isKnownDexRouter(params.chain, to);
 
     if (!isDexRouter && !isContractWhitelisted(config, to)) {
       return {
@@ -222,10 +235,7 @@ export async function validateApproval(
 
   if (config.security.whitelistedContractsOnly) {
     if (!isContractWhitelisted(config, tokenAddress)) {
-      const chainConfig = DEFAULT_CHAIN_CONFIGS[params.chain];
-      const isDexRouter =
-        chainConfig?.dexRouterAddress?.toLowerCase() ===
-        tokenAddress.toLowerCase();
+      const isDexRouter = isKnownDexRouter(params.chain, tokenAddress);
       if (!isDexRouter) {
         return {
           allowed: false,
@@ -275,10 +285,7 @@ export async function validateOutgoingTransfer(
   }
 
   if (params.config.security.whitelistedContractsOnly) {
-    const chainConfig = DEFAULT_CHAIN_CONFIGS[params.chain];
-    const isDexRouter =
-      chainConfig?.dexRouterAddress?.toLowerCase() ===
-      params.tokenAddress.toLowerCase();
+    const isDexRouter = isKnownDexRouter(params.chain, params.tokenAddress);
     if (
       !isDexRouter &&
       !isContractWhitelisted(params.config, params.tokenAddress)
@@ -300,7 +307,9 @@ export async function validateSwapTransaction(
   params: ValidationParams & { tokenIn: string; tokenOut: string }
 ): Promise<ValidationResult> {
   const chainConfig = DEFAULT_CHAIN_CONFIGS[params.chain];
-  const routerAddr = chainConfig?.dexRouterAddress;
+  const routerAddr = isKnownDexRouter(params.chain, params.to)
+    ? params.to
+    : chainConfig?.dexRouterAddress;
   if (!routerAddr) {
     return { allowed: false, reason: "No DEX router configured for chain" };
   }

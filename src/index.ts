@@ -63,6 +63,8 @@ import {
   DEFAULT_CHAIN_CONFIGS,
   KV_CONFIG_KEY,
   KV_MAX_GAS_PRICE_GWEI,
+  UNISWAP_V3_CHAINS,
+  UNISWAP_V3_SWAP_ROUTER_02,
 } from "./constants";
 
 import {
@@ -1353,7 +1355,16 @@ router.post(
       ]);
 
       const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
-      const routerAddr = chainConfig?.dexRouterAddress;
+      const dexVersion = body.dexVersion ?? "v2";
+      let routerAddr = chainConfig?.dexRouterAddress;
+      if (dexVersion === "v3") {
+        if (!UNISWAP_V3_CHAINS.includes(chain)) {
+          return Errors.badRequest(
+            `Uniswap V3 not supported on chain: ${chain}`
+          );
+        }
+        routerAddr = UNISWAP_V3_SWAP_ROUTER_02;
+      }
       if (!routerAddr) {
         return Errors.badRequest(
           `No DEX router configured for chain: ${chain}`

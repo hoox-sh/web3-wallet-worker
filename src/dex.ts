@@ -136,7 +136,7 @@ export async function getV3Quote(
       const amountOut = BigInt(
         Array.isArray(result) ? result[0] : (result?.amountOut ?? result)
       );
-      if (best === null || amountOut > best.amountOut) {
+      if (amountOut > 0n && (best === null || amountOut > best.amountOut)) {
         best = { amountOut, fee };
       }
     } catch {
