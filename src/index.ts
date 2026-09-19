@@ -15,7 +15,7 @@ import {
   loadChainRpcUrl,
   getChainRpcEnvKey,
 } from "./config";
-import { getReadOnlyProvider, connectWallet } from "./providers";
+import { getReadOnlyProvider, connectWallet, isSafeRpcUrl } from "./providers";
 import {
   getNativeBalance,
   getTokenBalance,
@@ -40,6 +40,19 @@ import {
   checkGasPriceLimit,
 } from "./security";
 import { resolveEnforcedValueUsd } from "./pricing";
+import { resolveToken } from "./token-registry";
+import {
+  executeJupiterOrder,
+  getJupiterUsdPrice,
+  getSolanaMintDecimals,
+  JUPITER_V6_PROGRAM_ID,
+  keypairFromSecret,
+  publicKeyBase58,
+  requestJupiterOrder,
+  signJupiterTransaction,
+  SOLANA_USDC_MINT,
+  SOLANA_USDT_MINT,
+} from "./solana";
 import type {
   ChainName,
   WalletConfig,
@@ -93,6 +106,10 @@ export interface Env extends AnalyticsEnv, InternalAuthEnv {
   RPC_URL_POLYGON?: string;
   RPC_URL_ARBITRUM?: string;
   RPC_URL_OPTIMISM?: string;
+  RPC_URL_SOLANA?: string;
+  // Solana / Jupiter (set via `wrangler secret put`; never logged).
+  SOLANA_PRIVATE_KEY?: string;
+  JUPITER_API_KEY?: string;
   // Service bindings (see wrangler.jsonc services block).
   TELEGRAM_SERVICE: Fetcher;
   ANALYTICS_SERVICE: Fetcher;
@@ -393,7 +410,7 @@ function trackApiCall(
 }
 
 async function sendNotification(
-  wallet: ethers.Wallet,
+  _wallet: { address: string },
   env: Env,
   message: string
 ): Promise<void> {
@@ -470,7 +487,7 @@ const WalletConfigUpdateSchema = z
   .object({
     enabled: z.boolean().optional(),
     defaultChain: z
-      .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism"])
+      .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism", "solana"])
       .optional(),
     dex: DexConfigUpdateSchema.optional(),
     security: SecurityConfigUpdateSchema.optional(),
@@ -479,16 +496,11 @@ const WalletConfigUpdateSchema = z
 
 const SwapRequestSchema = z.object({
   chain: z
-    .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism"])
+    .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism", "solana"])
     .optional(),
-  tokenIn: z
-    .string()
-    .regex(/^0x[a-fA-F0-9]{40}$/)
-    .optional(),
-  tokenOut: z
-    .string()
-    .regex(/^0x[a-fA-F0-9]{40}$/)
-    .optional(),
+  // Format validated in the handler (EVM 0x40 vs Solana base58 / symbols).
+  tokenIn: z.string().optional(),
+  tokenOut: z.string().optional(),
   amountIn: z.string().optional(),
   amountOutMin: z.string().optional(),
   slippage: z.number().min(0).max(50).optional(),
@@ -1101,6 +1113,173 @@ router.get(
   [requireAuth]
 );
 
+const SOLANA_STABLE_MINTS = new Set([SOLANA_USDC_MINT, SOLANA_USDT_MINT]);
+
+/**
+ * Solana swap path (Jupiter Swap V2). No ethers provider / dexRouterAddress.
+ * Fail-closed USD pricing via Jupiter + maxTransactionValueUsd.
+ * Do not reuse validateSwapTransaction (EVM whitelist + router).
+ */
+async function handleSolanaSwap(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  body: z.infer<typeof SwapRequestSchema>
+): Promise<Response> {
+  const solanaKey = env.SOLANA_PRIVATE_KEY?.trim();
+  const jupiterKey = env.JUPITER_API_KEY?.trim();
+  if (!solanaKey || !jupiterKey) {
+    return Errors.internal(
+      "Required Solana/Jupiter secret binding not configured or accessible."
+    );
+  }
+
+  const amountParsed = parsePositiveAmount(body.amountIn!);
+  if (!amountParsed.ok) {
+    return Errors.badRequest(amountParsed.reason);
+  }
+  if (amountParsed.value === 0n) {
+    return Errors.badRequest("amountIn must be positive");
+  }
+
+  const { key: idempotencyKey, error: idempotencyError } =
+    parseIdempotencyKey(request);
+  if (idempotencyError) return Errors.badRequest(idempotencyError);
+  await ensureTransactionsTable(env);
+  const replay = await checkIdempotencyReplay(env, idempotencyKey);
+  if (replay) return replay;
+
+  if (!DEFAULT_CHAIN_CONFIGS.solana?.enabled) {
+    return Errors.forbidden("Chain not enabled: solana");
+  }
+
+  await ensureConfigMigrated(env);
+  const config = await getConfig(env.CONFIG_KV);
+  if (!config.enabled) {
+    return Errors.forbidden("Wallet is disabled");
+  }
+
+  let tokenIn;
+  let tokenOut;
+  try {
+    tokenIn = resolveToken("solana", body.tokenIn!);
+    tokenOut = resolveToken("solana", body.tokenOut!);
+  } catch (err) {
+    return Errors.badRequest(toError(err, "Invalid token"));
+  }
+  const inputMint = tokenIn.mint;
+  const outputMint = tokenOut.mint;
+  if (!inputMint || !outputMint) {
+    return Errors.badRequest("Invalid Solana mint");
+  }
+
+  const rpcUrl = await loadRpcUrlForChain(env, "solana");
+  let inDecimals = tokenIn.decimals;
+  let outDecimals = tokenOut.decimals;
+  if (inDecimals < 0 || outDecimals < 0) {
+    if (!rpcUrl) {
+      return Errors.badRequest(
+        "No RPC URL configured for chain: solana. Set wallet:rpc:solana in CONFIG_KV or RPC_URL_SOLANA env."
+      );
+    }
+    if (!isSafeRpcUrl(rpcUrl)) {
+      return Errors.badRequest("Unsafe or invalid RPC URL for chain: solana");
+    }
+    try {
+      if (inDecimals < 0) {
+        inDecimals = await getSolanaMintDecimals({
+          rpcUrl,
+          mint: inputMint,
+        });
+      }
+      if (outDecimals < 0) {
+        outDecimals = await getSolanaMintDecimals({
+          rpcUrl,
+          mint: outputMint,
+        });
+      }
+    } catch (err) {
+      return Errors.badRequest(toError(err, "Failed to fetch mint decimals"));
+    }
+  }
+  if (inDecimals < 0 || outDecimals < 0) {
+    return Errors.badRequest("Unable to resolve token decimals");
+  }
+
+  if (amountParsed.value > 0n) {
+    const human = Number(amountParsed.value) / Math.pow(10, inDecimals);
+    const usdPrice = SOLANA_STABLE_MINTS.has(inputMint)
+      ? 1
+      : await getJupiterUsdPrice(inputMint, jupiterKey);
+    const valueUsd = usdPrice === null ? NaN : human * usdPrice;
+    if (usdPrice === null || !Number.isFinite(valueUsd) || !(valueUsd > 0)) {
+      return Errors.forbidden(
+        "Unable to price token server-side (Jupiter price unavailable). Swap blocked until a price path is available."
+      );
+    }
+    if (valueUsd > config.security.maxTransactionValueUsd) {
+      return Errors.forbidden(
+        `Transaction value $${valueUsd} exceeds max $${config.security.maxTransactionValueUsd}`
+      );
+    }
+  }
+
+  let keypair;
+  try {
+    keypair = keypairFromSecret(solanaKey);
+  } catch {
+    return Errors.internal("Configured Solana secret is invalid.");
+  }
+  const taker = publicKeyBase58(keypair);
+  // slippageBps wins when set; else 50 bps default for Jupiter ExactIn
+  const slippageBps = body.slippageBps ?? 50;
+
+  const order = await requestJupiterOrder({
+    inputMint,
+    outputMint,
+    amount: body.amountIn!,
+    taker,
+    slippageBps,
+    apiKey: jupiterKey,
+  });
+  const signedTransaction = signJupiterTransaction(
+    order.transaction,
+    solanaKey
+  );
+  const signature = await executeJupiterOrder({
+    signedTransaction,
+    requestId: order.requestId,
+    apiKey: jupiterKey,
+  });
+
+  const record: TransactionRecord = {
+    id: idempotencyKey ?? crypto.randomUUID(),
+    chain: "solana",
+    txHash: signature,
+    type: "swap",
+    status: "pending",
+    from: taker,
+    to: JUPITER_V6_PROGRAM_ID,
+    value: body.amountIn!,
+    tokenAddress: inputMint,
+    createdAt: Date.now(),
+  };
+  await storeTransaction(env.TRANSACTIONS_DB, record);
+
+  safeWaitUntil(
+    ctx,
+    sendNotification(
+      { address: taker },
+      env,
+      `Swap executed: ${body.amountIn} → ${signature.slice(0, 10)}...`
+    ),
+    (err) => logger.error("sendNotification failed", { error: String(err) })
+  );
+
+  trackApiCall(env, ctx, "/swap", 200);
+  return createJsonResponse({ txHash: signature, id: record.id }, 200);
+}
+
 // ── Route: POST /swap — Execute DEX swap ──
 
 router.post(
@@ -1117,6 +1296,9 @@ router.post(
         return Errors.badRequest(
           "Missing required fields: chain, tokenIn, tokenOut, amountIn"
         );
+      }
+      if (body.chain === "solana") {
+        return handleSolanaSwap(request, env, ctx, body);
       }
       // Native zero address allowed for tokenIn/tokenOut (ETH sentinel)
       if (

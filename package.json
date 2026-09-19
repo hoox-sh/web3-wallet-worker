@@ -22,7 +22,9 @@
   },
   "dependencies": {
     "@hoox-sh/hoox-shared": "workspace:*",
+    "bs58": "^6.0.0",
     "ethers": "^6.16.0",
+    "tweetnacl": "^1.0.3",
     "zod": "^4.0.0"
   },
   "author": "jango-blockchained (hoox-sh)",

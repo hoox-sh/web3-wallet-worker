@@ -19,6 +19,9 @@ interface __BaseEnv_Env {
   RPC_URL_POLYGON: string;
   RPC_URL_ARBITRUM: string;
   RPC_URL_OPTIMISM: string;
+  RPC_URL_SOLANA: string;
+  SOLANA_PRIVATE_KEY: string;
+  JUPITER_API_KEY: string;
   TELEGRAM_SERVICE: Fetcher /* telegram-worker */;
   ANALYTICS_SERVICE: Fetcher /* analytics-worker */;
   CONFIG_KV: KVNamespace;

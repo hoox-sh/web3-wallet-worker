@@ -43,6 +43,14 @@ describe("Provider Factory", () => {
         /No RPC URL configured/
       );
     });
+
+    it("throws for solana (no ethers provider)", () => {
+      expect(() =>
+        getReadOnlyProvider("solana", {
+          rpcUrl: "https://api.mainnet-beta.solana.com",
+        })
+      ).toThrow(/Solana has no ethers provider/);
+    });
   });
 
   describe("getProvider", () => {

@@ -434,6 +434,27 @@ describe("Web3 Wallet Worker with Secrets Store", () => {
     expect(res.status).toBe(400);
   });
 
+  it("POST /swap solana fails closed without Solana/Jupiter secrets", async () => {
+    const env = createMockEnv({ pk: TEST_PRIVATE_KEY });
+    const req = new Request("http://localhost/swap", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Auth-Key": "test-internal-key",
+      },
+      body: JSON.stringify({
+        chain: "solana",
+        tokenIn: "SOL",
+        tokenOut: "USDC",
+        amountIn: "1000000",
+      }),
+    });
+    const res = await worker.fetch(req, env, mockCtx);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    const json: any = await res.json();
+    expect(String(json.error)).toMatch(/Solana|Jupiter|secret/i);
+  });
+
   // ── POST /transfer more edges ──
 
   it("POST /transfer rejects invalid recipient address", async () => {

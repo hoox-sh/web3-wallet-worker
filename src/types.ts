@@ -24,7 +24,8 @@ export type ChainName =
   | "bsc"
   | "polygon"
   | "arbitrum"
-  | "optimism";
+  | "optimism"
+  | "solana";
 
 export type DexVersion = "v2" | "v3";
 

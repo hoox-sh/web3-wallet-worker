@@ -17,3 +17,8 @@ INTERNAL_KEY_BINDING=your_internal_key_binding_here
 # RPC_URL_POLYGON=
 # RPC_URL_ARBITRUM=
 # RPC_URL_OPTIMISM=
+# RPC_URL_SOLANA=
+
+# Solana / Jupiter (use `wrangler secret put` in production; never commit secrets)
+# SOLANA_PRIVATE_KEY=
+# JUPITER_API_KEY=

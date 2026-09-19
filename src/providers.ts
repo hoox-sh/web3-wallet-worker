@@ -69,6 +69,11 @@ export function getReadOnlyProvider(
   chain: ChainName,
   opts: { rpcUrl?: string } = {}
 ): ethers.JsonRpcProvider {
+  if (chain === "solana") {
+    throw new Error(
+      "Solana has no ethers provider; use the solana module with wallet:rpc:solana / RPC_URL_SOLANA"
+    );
+  }
   const config = getChainConfig(chain);
   const rpcUrl = opts.rpcUrl || config.rpcUrl;
   if (!rpcUrl) {

@@ -32,7 +32,8 @@
     "RPC_URL_BSC": "",
     "RPC_URL_POLYGON": "",
     "RPC_URL_ARBITRUM": "",
-    "RPC_URL_OPTIMISM": ""
+    "RPC_URL_OPTIMISM": "",
+    "RPC_URL_SOLANA": ""
   },
   "kv_namespaces": [
     {

@@ -13,6 +13,7 @@ export const SUPPORTED_CHAINS: ChainName[] = [
   "polygon",
   "arbitrum",
   "optimism",
+  "solana",
 ];
 
 /** Default chain configs (RPC URLs set via env/KV, these are placeholders) */
@@ -66,6 +67,15 @@ export const DEFAULT_CHAIN_CONFIGS: Record<ChainName, ChainConfig> = {
     dexRouterAddress: "",
     wrappedNativeAddress: "0x4200000000000000000000000000000000000006",
     enabled: false,
+  },
+  solana: {
+    name: "Solana",
+    // not an EVM id; Solana uses genesis hash — cache-key namespace only
+    chainId: 0,
+    rpcUrl: "",
+    currency: "SOL",
+    explorerUrl: "https://solscan.io",
+    enabled: true,
   },
 };
 

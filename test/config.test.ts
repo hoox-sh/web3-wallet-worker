@@ -68,8 +68,16 @@ describe("Config Manager", () => {
       expect(config.currency).toBe("ETH");
     });
 
+    it("should return Solana chain config", () => {
+      const config = getChainConfig("solana");
+      expect(config.name).toBe("Solana");
+      expect(config.chainId).toBe(0);
+      expect(config.currency).toBe("SOL");
+      expect(config.enabled).toBe(true);
+    });
+
     it("should throw for unknown chain", () => {
-      expect(() => getChainConfig("solana" as any)).toThrow(
+      expect(() => getChainConfig("bitcoin" as any)).toThrow(
         "Unsupported chain"
       );
     });

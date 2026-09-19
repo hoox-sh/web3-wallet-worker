@@ -47,7 +47,7 @@ const WalletConfigUpdateSchema = z
   .object({
     enabled: z.boolean().optional(),
     defaultChain: z
-      .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism"])
+      .enum(["ethereum", "bsc", "polygon", "arbitrum", "optimism", "solana"])
       .optional(),
     dex: DexConfigUpdateSchema.optional(),
     security: SecurityConfigUpdateSchema.optional(),
@@ -144,9 +144,16 @@ describe("WalletConfigUpdateSchema (C-5 fix)", () => {
 
   it("rejects defaultChain values outside the enum", () => {
     const result = WalletConfigUpdateSchema.safeParse({
-      defaultChain: "solana",
+      defaultChain: "bitcoin",
     });
     expect(result.success).toBe(false);
+  });
+
+  it("accepts solana as defaultChain", () => {
+    const result = WalletConfigUpdateSchema.safeParse({
+      defaultChain: "solana",
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects negative slippageTolerance", () => {

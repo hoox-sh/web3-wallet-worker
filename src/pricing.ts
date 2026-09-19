@@ -70,6 +70,7 @@ const CHAIN_QUOTE_STABLES: Record<ChainName, string[]> = {
     "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", // USDC
     "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", // USDT
   ],
+  solana: [],
 };
 
 const NATIVE_ZERO = "0x0000000000000000000000000000000000000000";
@@ -81,6 +82,7 @@ const NATIVE_BINANCE_PAIR: Record<ChainName, string | null> = {
   polygon: "MATICUSDT",
   arbitrum: "ETHUSDT",
   optimism: "ETHUSDT",
+  solana: null,
 };
 
 /** In-memory price cache (per isolate) — short TTL to limit external calls. */

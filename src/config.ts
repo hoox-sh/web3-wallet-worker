@@ -31,6 +31,7 @@ const ChainNameSchema = z.enum([
   "polygon",
   "arbitrum",
   "optimism",
+  "solana",
 ]);
 
 const DexConfigSchema = z
