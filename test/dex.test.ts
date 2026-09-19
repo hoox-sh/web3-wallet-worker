@@ -70,6 +70,44 @@ const mockContractInstance = {
   })),
 };
 
+const mockQuoterInstance = {
+  quoteExactInputSingle: Object.assign(
+    mock(async (params: { fee: number }) => [
+      2000000n * BigInt(params.fee === 3000 ? 2 : 1),
+      0n,
+      0,
+      0n,
+    ]),
+    {
+      staticCall: mock(async (params: { fee: number }) => [
+        2000000n * BigInt(params.fee === 3000 ? 2 : 1),
+        0n,
+        0,
+        0n,
+      ]),
+    }
+  ),
+};
+
+const mockSwapRouter02Instance = {
+  exactInputSingle: mock(async () => ({
+    hash: "0xv3hash",
+    wait: mock(async () => ({ hash: "0xv3confirm" })),
+  })),
+  unwrapWETH9: mock(async () => ({
+    hash: "0xunwrap",
+    wait: mock(async () => ({ hash: "0xunwrap" })),
+  })),
+  multicall: mock(async () => ({
+    hash: "0xv3multi",
+    wait: mock(async () => ({ hash: "0xv3confirm" })),
+  })),
+  interface: { encodeFunctionData: mock(() => "0xdead") },
+};
+
+const QUOTER_V2 = "0x61fFE014bA17989E743c5F6cB21bF9697530B21e";
+const SWAP_ROUTER_02 = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45";
+
 let lastContractAddress = "";
 let lastContractAbi: unknown = null;
 let lastContractSigner: unknown = null;
@@ -79,6 +117,13 @@ const mockContractCtor = mock(
     lastContractAddress = address;
     lastContractAbi = abi;
     lastContractSigner = providerOrSigner;
+    const lower = address.toLowerCase();
+    if (lower === QUOTER_V2.toLowerCase()) {
+      return mockQuoterInstance;
+    }
+    if (lower === SWAP_ROUTER_02.toLowerCase()) {
+      return mockSwapRouter02Instance;
+    }
     // Return router mock for DEX router address, contract mock otherwise
     if (
       address.toLowerCase().includes("router") ||
@@ -95,7 +140,9 @@ mock.module("ethers", () => {
   class MockWallet {
     address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
     privateKey: string;
-    provider: unknown = { getFeeData: async () => ({ maxFeePerGas: 20n * 10n ** 9n }) };
+    provider: unknown = {
+      getFeeData: async () => ({ maxFeePerGas: 20n * 10n ** 9n }),
+    };
     constructor(key: string) {
       this.privateKey = key;
     }
@@ -142,7 +189,13 @@ mock.module("ethers", () => {
 // ---------------------------------------------------------------------------
 // Module under test
 // ---------------------------------------------------------------------------
-import { getQuote, executeSwap, checkAllowanceAndApprove } from "../src/dex";
+import {
+  getQuote,
+  getV3Quote,
+  executeSwap,
+  checkAllowanceAndApprove,
+} from "../src/dex";
+import { UNISWAP_V3_FEE_TIERS } from "../src/constants";
 import {
   TEST_TOKEN_ADDRESS,
   TEST_RECEIVER_ADDRESS,
@@ -173,6 +226,11 @@ describe("DEX Swap Engine", () => {
     mockRouterInstance.swapExactTokensForTokens.mockClear();
     mockContractInstance.allowance.mockClear();
     mockContractInstance.approve.mockClear();
+    mockQuoterInstance.quoteExactInputSingle.mockClear();
+    mockQuoterInstance.quoteExactInputSingle.staticCall.mockClear();
+    mockSwapRouter02Instance.exactInputSingle.mockClear();
+    mockSwapRouter02Instance.unwrapWETH9.mockClear();
+    mockSwapRouter02Instance.multicall.mockClear();
   });
 
   describe("getQuote", () => {
@@ -388,6 +446,73 @@ describe("DEX Swap Engine", () => {
         spender,
         swapAmount
       );
+    });
+  });
+
+  describe("getV3Quote", () => {
+    it("picks fee 3000 (best output with the fixture)", async () => {
+      const quote = await getV3Quote(
+        mockProvider,
+        chain,
+        TEST_TOKEN_ADDRESS,
+        TEST_RECEIVER_ADDRESS,
+        swapAmount
+      );
+
+      expect(quote.fee).toBe(3000);
+      expect(quote.amountOut).toBe(4000000n);
+    });
+
+    it("fee is one of 100/500/3000/10000", async () => {
+      const quote = await getV3Quote(
+        mockProvider,
+        chain,
+        TEST_TOKEN_ADDRESS,
+        TEST_RECEIVER_ADDRESS,
+        swapAmount
+      );
+
+      expect(UNISWAP_V3_FEE_TIERS).toContain(quote.fee);
+      expect([100, 500, 3000, 10000]).toContain(quote.fee);
+    });
+
+    it("quotes via staticCall (QuoterV2 is non-view)", async () => {
+      await getV3Quote(
+        mockProvider,
+        chain,
+        TEST_TOKEN_ADDRESS,
+        TEST_RECEIVER_ADDRESS,
+        swapAmount
+      );
+
+      expect(
+        mockQuoterInstance.quoteExactInputSingle.staticCall
+      ).toHaveBeenCalled();
+    });
+  });
+
+  describe("executeSwap - Uniswap V3", () => {
+    it("hits V3 path when dexVersion is v3", async () => {
+      mockContractInstance.allowance = mock(async () => swapAmount);
+
+      const hash = await executeSwap(
+        mockWallet,
+        chain,
+        {
+          chain,
+          tokenIn: TEST_TOKEN_ADDRESS,
+          tokenOut: TEST_RECEIVER_ADDRESS,
+          amountIn: swapAmount.toString(),
+          dexVersion: "v3",
+        },
+        testWalletConfig
+      );
+
+      expect(hash).toBe("0xv3confirm");
+      expect(mockSwapRouter02Instance.exactInputSingle).toHaveBeenCalled();
+      expect(
+        mockRouterInstance.swapExactTokensForTokens
+      ).not.toHaveBeenCalled();
     });
   });
 });

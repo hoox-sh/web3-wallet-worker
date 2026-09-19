@@ -499,6 +499,9 @@ const SwapRequestSchema = z.object({
   deadline: z.number().int().positive().optional(),
   /** USD notional for security limit enforcement (required on mutating routes). */
   valueUsd: z.number().nonnegative().optional(),
+  dexVersion: z.enum(["v2", "v3"]).optional(),
+  // slippageBps wins when set; else config.dex.slippageTolerance
+  slippageBps: z.number().int().min(0).max(10000).optional(),
 });
 
 const TransferTokenSchema = z.object({

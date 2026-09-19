@@ -26,6 +26,8 @@ export type ChainName =
   | "arbitrum"
   | "optimism";
 
+export type DexVersion = "v2" | "v3";
+
 /* ── DEX Configuration ── */
 export interface DexConfig {
   slippageTolerance: number; // 0.5 = 0.5%
@@ -69,6 +71,10 @@ export interface SwapRequest {
   minAmountOut?: string; // derived from slippage if not provided
   recipient?: string; // defaults to wallet address
   deadline?: number; // unix timestamp, defaults to 20 min from now
+  /** Uniswap V2 (default) or V3 (ethereum / arbitrum). */
+  dexVersion?: DexVersion;
+  /** Slippage in basis points (100 = 1%). Wins over dex.slippageTolerance. */
+  slippageBps?: number;
 }
 
 /* ── Transaction Record ── */

@@ -55,7 +55,7 @@ export const DEFAULT_CHAIN_CONFIGS: Record<ChainName, ChainConfig> = {
     explorerUrl: "https://arbiscan.io",
     dexRouterAddress: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
     wrappedNativeAddress: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
-    enabled: false,
+    enabled: true,
   },
   optimism: {
     name: "Optimism",
@@ -117,4 +117,37 @@ export const DEX_ROUTER_ABI = [
   "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) returns (uint[] memory amounts)",
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory amounts)",
   "function WETH() pure returns (address)",
+] as const;
+
+/** Uniswap V3 fee tiers: 0.01%, 0.05%, 0.3%, 1%. */
+export const UNISWAP_V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
+
+/**
+ * SwapRouter02 — same CREATE2 address on Ethereum and Arbitrum.
+ * Checksum `C7bD` (not `C7Bd`).
+ */
+export const UNISWAP_V3_SWAP_ROUTER_02 =
+  "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45";
+
+/**
+ * QuoterV2 — official Uniswap address (Ethereum + Arbitrum CREATE2).
+ * Do not use the commonly-copied `...Fb8d69d` typo.
+ */
+export const UNISWAP_V3_QUOTER_V2 =
+  "0x61fFE014bA17989E743c5F6cB21bF9697530B21e";
+
+/** Chains that host Uniswap V3 SwapRouter02 / QuoterV2 at the addresses above. */
+export const UNISWAP_V3_CHAINS: readonly ChainName[] = [
+  "ethereum",
+  "arbitrum",
+] as const;
+
+export const UNISWAP_V3_QUOTER_V2_ABI = [
+  "function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)",
+] as const;
+
+export const UNISWAP_V3_SWAP_ROUTER_02_ABI = [
+  "function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)",
+  "function unwrapWETH9(uint256 amountMinimum, address recipient) payable",
+  "function multicall(bytes[] data) payable returns (bytes[] results)",
 ] as const;

@@ -7,7 +7,16 @@
 
 import { ethers } from "ethers";
 import type { ChainName, SwapRequest, WalletConfig } from "./types";
-import { ERC20_ABI, DEX_ROUTER_ABI } from "./constants";
+import {
+  ERC20_ABI,
+  DEX_ROUTER_ABI,
+  UNISWAP_V3_FEE_TIERS,
+  UNISWAP_V3_SWAP_ROUTER_02,
+  UNISWAP_V3_QUOTER_V2,
+  UNISWAP_V3_CHAINS,
+  UNISWAP_V3_QUOTER_V2_ABI,
+  UNISWAP_V3_SWAP_ROUTER_02_ABI,
+} from "./constants";
 import { getChainConfig } from "./config";
 
 /** Native token sentinel address (router replaces with WETH/WBNB internally) */
@@ -18,7 +27,7 @@ const NATIVE_TOKEN = ethers.ZeroAddress;
  * Returns EIP-1559 overrides, or `{}` when fees are unreadable or the
  * multiplier is <= 1 (node defaults apply). Never throws.
  */
-async function buildGasOverrides(
+export async function buildGasOverrides(
   provider: ethers.Provider,
   multiplier: number
 ): Promise<ethers.TransactionRequest> {
@@ -71,6 +80,179 @@ export async function getQuote(
   return out;
 }
 
+export interface V3Quote {
+  amountOut: bigint;
+  fee: number;
+}
+
+/**
+ * Quote Uniswap V3 exact-input across fee tiers; pick the best amountOut.
+ * QuoterV2.quoteExactInputSingle is non-view — must use `.staticCall`.
+ * Native (ZeroAddress) is wrapped before quoting.
+ */
+export async function getV3Quote(
+  provider: ethers.Provider,
+  chain: ChainName,
+  tokenIn: string,
+  tokenOut: string,
+  amountIn: bigint
+): Promise<V3Quote> {
+  if (!UNISWAP_V3_CHAINS.includes(chain)) {
+    throw new Error(`Uniswap V3 not supported on chain: ${chain}`);
+  }
+
+  const chainConfig = getChainConfig(chain);
+  const wNative = chainConfig.wrappedNativeAddress;
+  if (!wNative) {
+    throw new Error(`No wrapped native for chain: ${chain}`);
+  }
+
+  const native = ethers.ZeroAddress;
+  const resolvedIn =
+    tokenIn.toLowerCase() === native.toLowerCase() ? wNative : tokenIn;
+  const resolvedOut =
+    tokenOut.toLowerCase() === native.toLowerCase() ? wNative : tokenOut;
+
+  const quoter = new ethers.Contract(
+    UNISWAP_V3_QUOTER_V2,
+    UNISWAP_V3_QUOTER_V2_ABI,
+    provider
+  );
+  const quoteFn = quoter.quoteExactInputSingle;
+  if (!quoteFn?.staticCall) {
+    throw new Error("QuoterV2 quoteExactInputSingle method unavailable");
+  }
+
+  let best: V3Quote | null = null;
+  for (const fee of UNISWAP_V3_FEE_TIERS) {
+    try {
+      const result = await quoteFn.staticCall({
+        tokenIn: resolvedIn,
+        tokenOut: resolvedOut,
+        amountIn,
+        fee,
+        sqrtPriceLimitX96: 0,
+      });
+      const amountOut = BigInt(
+        Array.isArray(result) ? result[0] : (result?.amountOut ?? result)
+      );
+      if (best === null || amountOut > best.amountOut) {
+        best = { amountOut, fee };
+      }
+    } catch {
+      // no pool at this fee tier
+    }
+  }
+  if (!best) {
+    throw new Error("No Uniswap V3 quote available for this pair");
+  }
+  return best;
+}
+
+/**
+ * Execute a Uniswap V3 exactInputSingle swap via SwapRouter02.
+ *
+ * Native in: tokenIn=WETH, send `value: amountIn`.
+ * Native out: tokenOut=WETH, recipient=router, then unwrapWETH9 to the user
+ * via multicall (matches V2 swapExactTokensForETH).
+ */
+export async function executeV3Swap(
+  wallet: ethers.Wallet,
+  chain: ChainName,
+  request: SwapRequest,
+  config: WalletConfig,
+  fee: number,
+  minAmountOut: bigint
+): Promise<string> {
+  if (!UNISWAP_V3_CHAINS.includes(chain)) {
+    throw new Error(`Uniswap V3 not supported on chain: ${chain}`);
+  }
+
+  const chainConfig = getChainConfig(chain);
+  const wNative = chainConfig.wrappedNativeAddress;
+  if (!wNative) {
+    throw new Error(`No wrapped native for chain: ${chain}`);
+  }
+
+  const provider = wallet.provider!;
+  const native = ethers.ZeroAddress;
+  const isNativeIn = request.tokenIn.toLowerCase() === native.toLowerCase();
+  const isNativeOut = request.tokenOut.toLowerCase() === native.toLowerCase();
+  const tokenIn = isNativeIn ? wNative : request.tokenIn;
+  const tokenOut = isNativeOut ? wNative : request.tokenOut;
+  const amountIn = BigInt(request.amountIn);
+  const userRecipient = request.recipient || wallet.address;
+
+  if (!isNativeIn) {
+    await checkAllowanceAndApprove(
+      wallet,
+      provider,
+      request.tokenIn,
+      UNISWAP_V3_SWAP_ROUTER_02,
+      amountIn
+    );
+  }
+
+  const router = new ethers.Contract(
+    UNISWAP_V3_SWAP_ROUTER_02,
+    UNISWAP_V3_SWAP_ROUTER_02_ABI,
+    wallet
+  );
+  const gasOverrides = await buildGasOverrides(
+    provider,
+    config.dex.gasMultiplier
+  );
+  const valueOverrides = isNativeIn
+    ? { value: amountIn, ...gasOverrides }
+    : gasOverrides;
+
+  let tx: ethers.TransactionResponse;
+
+  if (isNativeOut) {
+    const encode = router.interface?.encodeFunctionData;
+    if (!encode) {
+      throw new Error("SwapRouter02 interface.encodeFunctionData unavailable");
+    }
+    const swapData = encode("exactInputSingle", [
+      {
+        tokenIn,
+        tokenOut,
+        fee,
+        recipient: UNISWAP_V3_SWAP_ROUTER_02,
+        amountIn,
+        amountOutMinimum: minAmountOut,
+        sqrtPriceLimitX96: 0,
+      },
+    ]);
+    const unwrapData = encode("unwrapWETH9", [minAmountOut, userRecipient]);
+    const multicall = router.multicall;
+    if (!multicall) {
+      throw new Error("SwapRouter02 multicall method unavailable");
+    }
+    tx = await multicall([swapData, unwrapData], valueOverrides);
+  } else {
+    const exactInputSingle = router.exactInputSingle;
+    if (!exactInputSingle) {
+      throw new Error("SwapRouter02 exactInputSingle method unavailable");
+    }
+    tx = await exactInputSingle(
+      {
+        tokenIn,
+        tokenOut,
+        fee,
+        recipient: userRecipient,
+        amountIn,
+        amountOutMinimum: minAmountOut,
+        sqrtPriceLimitX96: 0,
+      },
+      valueOverrides
+    );
+  }
+
+  const receipt = await tx.wait();
+  return receipt?.hash ?? tx.hash;
+}
+
 /**
  * Execute a swap via the DEX router.
  *
@@ -86,6 +268,44 @@ export async function executeSwap(
   request: SwapRequest,
   config: WalletConfig
 ): Promise<string> {
+  const provider = wallet.provider!;
+  const dexVersion = request.dexVersion ?? "v2";
+  if (dexVersion === "v3") {
+    const chainConfig = getChainConfig(chain);
+    const wNative = chainConfig.wrappedNativeAddress;
+    if (!wNative) throw new Error(`No wrapped native for chain: ${chain}`);
+    const native = ethers.ZeroAddress;
+    const tokenIn =
+      request.tokenIn.toLowerCase() === native.toLowerCase()
+        ? wNative
+        : request.tokenIn;
+    const tokenOut =
+      request.tokenOut.toLowerCase() === native.toLowerCase()
+        ? wNative
+        : request.tokenOut;
+    const best = await getV3Quote(
+      provider,
+      chain,
+      tokenIn,
+      tokenOut,
+      BigInt(request.amountIn)
+    );
+    // slippageBps wins when set; else config.dex.slippageTolerance
+    const bps =
+      request.slippageBps ?? Math.floor(config.dex.slippageTolerance * 100);
+    const v3Min =
+      request.minAmountOut ??
+      ((best.amountOut * BigInt(10000 - bps)) / 10000n).toString();
+    return executeV3Swap(
+      wallet,
+      chain,
+      request,
+      config,
+      best.fee,
+      BigInt(v3Min)
+    );
+  }
+
   const chainConfig = getChainConfig(chain);
   const routerAddr = chainConfig.dexRouterAddress;
   if (!routerAddr) {
@@ -99,7 +319,6 @@ export async function executeSwap(
   const path = buildPath(chain, request.tokenIn, request.tokenOut);
 
   // Compute minAmountOut from slippage
-  const provider = wallet.provider!;
   const quote = await getQuote(
     provider,
     chain,
@@ -107,7 +326,9 @@ export async function executeSwap(
     request.tokenOut,
     BigInt(request.amountIn)
   );
-  const slippageBasis = Math.floor(config.dex.slippageTolerance * 100);
+  // slippageBps wins when set; else config.dex.slippageTolerance
+  const slippageBasis =
+    request.slippageBps ?? Math.floor(config.dex.slippageTolerance * 100);
   const minAmountOut =
     request.minAmountOut ?? (quote * BigInt(10000 - slippageBasis)) / 10000n;
 
