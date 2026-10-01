@@ -1,8 +1,6 @@
 # HOOX · Web3 Wallet Worker
 
-**On-chain identity at the edge — derives wallet addresses from cold-stored keys. The bridge between CeFi execution and DeFi settlement.**
-
-**On-chain identity resolution — derives wallet addresses from cold-stored keys at the edge. The bridge between CeFi execution and DeFi settlement.**
+**On-chain signing at the edge — Uniswap V3 and Jupiter Swap V2. The bridge between CeFi execution and DeFi settlement.**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Runtime](https://img.shields.io/badge/Runtime-Bun-black?logo=bun)](https://bun.sh) [![Platform](https://img.shields.io/badge/Platform-Cloudflare%C2%AE%20Workers-orange?logo=cloudflare)](https://workers.cloudflare.com/) [![License](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
 
@@ -11,23 +9,22 @@
 
 ---
 
-The web3-wallet-worker provides on-chain identity resolution within the HOOX mesh. At initialization, it reads an ECDSA private key (`WALLET_PK_SECRET`) or a BIP-39 mnemonic phrase (`WALLET_MNEMONIC_SECRET`) from Cloudflare Secrets Store bindings — never from environment variables — and derives the corresponding Ethereum address via `ethers.js` v6 (`HDNodeWallet` / `Wallet`). The resolved address is logged to the [`analytics-worker`](https://github.com/hoox-sh/analytics-worker) and broadcast through the [`telegram-worker`](https://github.com/hoox-sh/telegram-worker) as a wallet-ready notification.
-
-Secret format validation is enforced at the parser level: private keys must match `/^0x?[0-9a-fA-F]{64}$/`; mnemonics must contain 12 or more BIP-39 words. No swap, DeFi transaction signing, or arbitrary on-chain execution is implemented at this layer — this isolate is deliberately scoped to identity derivation and future on-chain primitive dispatch.
+The web3-wallet-worker holds EVM (`WALLET_PK_SECRET` / `WALLET_MNEMONIC_SECRET`) and Solana (`SOLANA_PRIVATE_KEY`) signing material as Cloudflare Secrets. `POST /swap` executes Uniswap V3 on Ethereum/Arbitrum (`dexVersion: "v3"`) and Jupiter Swap V2 on Solana. `trade-worker` calls this isolate over `WEB3_WALLET_SERVICE`. `hoox setup` writes `WALLET_EXECUTE_KEY_BINDING` and a Solana seed if missing.
 
 ### Role in the Mesh
 
 ```
 Cloudflare Secrets Store
-    WALLET_PK_SECRET / WALLET_MNEMONIC_SECRET
+    WALLET_PK_SECRET / WALLET_MNEMONIC_SECRET / SOLANA_PRIVATE_KEY
               │
               ▼
 ┌──────────────────────┐
 │ web3-wallet-worker   │  ← private (Smart Placement)
-│ (ethers.js v6)       │
+│ Uniswap V3 / Jupiter │
 └──┬───────────────────┘
    │
-   ├──► telegram-worker (wallet init notification)
+   ├──► called by trade-worker (WEB3_WALLET_SERVICE POST /swap)
+   ├──► telegram-worker (notifications)
    └──► analytics-worker (event telemetry)
 ```
 
@@ -44,7 +41,7 @@ Cloudflare Secrets Store
 | `POST` | `/transfer`       | Internal key | ERC-20 transfer (gas trap + USD policy)          |
 | `POST` | `/approve`        | Internal key | ERC-20 approve (whitelist + maxApprovalAmount)   |
 | `GET`  | `/quote`          | Internal key | DEX quote                                        |
-| `POST` | `/swap`           | Internal key | DEX swap                                         |
+| `POST` | `/swap`           | Internal key | Uniswap V2/V3 or Jupiter Swap V2                 |
 | `GET`  | `/transactions`   | Internal key | List D1 transaction records                      |
 
 ### Security Model
@@ -67,7 +64,7 @@ bun test workers/web3-wallet-worker
 
 | Direction | Peers |
 | --------- | ----- |
-| **Called by** | [dashboard](https://github.com/hoox-sh/hoox/tree/main/workers/dashboard) and internal operators (wallet init / health). |
+| **Called by** | [trade-worker](https://github.com/hoox-sh/trade-worker) (`WEB3_WALLET_SERVICE`), [hoox-worker](https://github.com/hoox-sh/hoox-worker) (`/wallet` proxy), dashboard. |
 | **This worker calls** | See list below |
 
 - **[telegram-worker](https://github.com/hoox-sh/telegram-worker)** — TELEGRAM_SERVICE — wallet-ready notifications
@@ -78,7 +75,7 @@ Full mesh (all isolates live as git submodules under [`hoox-sh/hoox`](https://gi
 | Isolate | Role | Repository |
 | ------- | ---- | ---------- |
 | [hoox-worker](https://github.com/hoox-sh/hoox-worker) | Public webhook gateway (WAF, idempotency, dispatch) | monorepo `workers/hoox-worker` |
-| [trade-worker](https://github.com/hoox-sh/trade-worker) | Multi-exchange order execution (Binance / Bybit / MEXC) | monorepo `workers/trade-worker` |
+| [trade-worker](https://github.com/hoox-sh/trade-worker) | CEX + DEX spots (Uniswap V3 / Jupiter) | monorepo `workers/trade-worker` |
 | [agent-worker](https://github.com/hoox-sh/agent-worker) | AI risk manager (configurable cron 1–1440 min, kill switch) | monorepo `workers/agent-worker` |
 | [d1-worker](https://github.com/hoox-sh/d1-worker) | D1 SQL proxy + settings / balances / positions | monorepo `workers/d1-worker` |
 | [telegram-worker](https://github.com/hoox-sh/telegram-worker) | Alerts, bot commands, RAG copilot | monorepo `workers/telegram-worker` |
