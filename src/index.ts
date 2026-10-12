@@ -127,11 +127,12 @@ export interface Env extends AnalyticsEnv, InternalAuthEnv {
 }
 
 /**
- * Row owner for wallet_transactions: env tenant when the flag is on,
- * else "" (unscoped self-host rows).
+ * Row owner for wallet_transactions: env tenant when the flag is on
+ * (authoritative), else a caller-supplied `tenantId` from the proxied body
+ * (shared-upload path, validated leniently), else "" (unscoped self-host).
  */
-function rowTenant(env: Env): string {
-  return effectiveTenantId(env as TenantEnv) ?? "";
+export function rowTenant(env: Env, msg?: { tenantId?: unknown }): string {
+  return effectiveTenantId(env as TenantEnv, msg) ?? "";
 }
 
 const router = createRouter<Env>();
@@ -354,13 +355,14 @@ function parseIdempotencyKey(request: Request): {
  */
 async function checkIdempotencyReplay(
   env: Env,
-  key: string | undefined
+  key: string | undefined,
+  msg?: { tenantId?: unknown }
 ): Promise<Response | null> {
   if (!key) return null;
   const existing = await getTransaction(
     env.TRANSACTIONS_DB,
     key,
-    rowTenant(env)
+    rowTenant(env, msg)
   );
   if (!existing) return null;
   return createJsonResponse(
@@ -546,6 +548,11 @@ const SwapRequestSchema = z.object({
   dexVersion: z.enum(["v2", "v3"]).optional(),
   // slippageBps wins when set; else config.dex.slippageTolerance
   slippageBps: z.number().int().min(0).max(10000).optional(),
+  /**
+   * Opt-in tenant attribution for platform deployments (proxied by hoox).
+   * Absent on self-host. Scoped into transaction rows — never for auth.
+   */
+  tenantId: z.string().min(1).max(64).optional(),
 });
 
 const TransferTokenSchema = z.object({
@@ -563,6 +570,11 @@ const TransferTokenSchema = z.object({
   amount: z.string().optional(),
   /** USD notional for security limit enforcement (required on mutating routes). */
   valueUsd: z.number().nonnegative().optional(),
+  /**
+   * Opt-in tenant attribution for platform deployments (proxied by hoox).
+   * Absent on self-host. Scoped into transaction rows — never for auth.
+   */
+  tenantId: z.string().min(1).max(64).optional(),
 });
 
 const ApproveTokenSchema = z.object({
@@ -578,6 +590,11 @@ const ApproveTokenSchema = z.object({
     .regex(/^0x[a-fA-F0-9]{40}$/)
     .optional(),
   amount: z.string().optional(),
+  /**
+   * Opt-in tenant attribution for platform deployments (proxied by hoox).
+   * Absent on self-host. Scoped into transaction rows — never for auth.
+   */
+  tenantId: z.string().min(1).max(64).optional(),
 });
 
 // ── Route: GET / — Wallet init ──
@@ -860,7 +877,7 @@ router.post(
         parseIdempotencyKey(request);
       if (idempotencyError) return Errors.badRequest(idempotencyError);
       await ensureTransactionsTable(env);
-      const replay = await checkIdempotencyReplay(env, idempotencyKey);
+      const replay = await checkIdempotencyReplay(env, idempotencyKey, body);
       if (replay) return replay;
 
       const walletResult = createWalletFromEnv(env);
@@ -945,7 +962,7 @@ router.post(
         tokenAddress: body.tokenAddress,
         createdAt: Date.now(),
       };
-      await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env));
+      await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env, body));
 
       trackApiCall(env, ctx, "/transfer", 200);
       return createJsonResponse({ txHash, id: record.id }, 200);
@@ -995,7 +1012,7 @@ router.post(
         parseIdempotencyKey(request);
       if (idempotencyError) return Errors.badRequest(idempotencyError);
       await ensureTransactionsTable(env);
-      const replay = await checkIdempotencyReplay(env, idempotencyKey);
+      const replay = await checkIdempotencyReplay(env, idempotencyKey, body);
       if (replay) return replay;
 
       if (!DEFAULT_CHAIN_CONFIGS[body.chain!]!.enabled) {
@@ -1064,7 +1081,7 @@ router.post(
         tokenAddress: body.tokenAddress,
         createdAt: Date.now(),
       };
-      await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env));
+      await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env, body));
 
       trackApiCall(env, ctx, "/approve", 200);
       return createJsonResponse({ txHash, id: record.id }, 200);
@@ -1178,7 +1195,7 @@ async function handleSolanaSwap(
     parseIdempotencyKey(request);
   if (idempotencyError) return Errors.badRequest(idempotencyError);
   await ensureTransactionsTable(env);
-  const replay = await checkIdempotencyReplay(env, idempotencyKey);
+  const replay = await checkIdempotencyReplay(env, idempotencyKey, body);
   if (replay) return replay;
 
   if (!DEFAULT_CHAIN_CONFIGS.solana?.enabled) {
@@ -1296,7 +1313,7 @@ async function handleSolanaSwap(
     tokenAddress: inputMint,
     createdAt: Date.now(),
   };
-  await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env));
+  await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env, body));
 
   safeWaitUntil(
     ctx,
@@ -1360,7 +1377,7 @@ router.post(
         parseIdempotencyKey(request);
       if (idempotencyError) return Errors.badRequest(idempotencyError);
       await ensureTransactionsTable(env);
-      const replay = await checkIdempotencyReplay(env, idempotencyKey);
+      const replay = await checkIdempotencyReplay(env, idempotencyKey, body);
       if (replay) return replay;
 
       if (!DEFAULT_CHAIN_CONFIGS[body.chain!]!.enabled) {
@@ -1491,7 +1508,7 @@ router.post(
           body.tokenIn === ethers.ZeroAddress ? undefined : body.tokenIn,
         createdAt: Date.now(),
       };
-      await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env));
+      await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env, body));
 
       safeWaitUntil(
         ctx,
@@ -1559,7 +1576,10 @@ router.get(
         status,
         limit,
         offset,
-        tenantId: rowTenant(env),
+        // Env tenant wins when the flag is on; else an explicit ?tenantId=.
+        tenantId: rowTenant(env, {
+          tenantId: url.searchParams.get("tenantId"),
+        }),
       });
 
       return createJsonResponse({ transactions: txs, count: txs.length }, 200);

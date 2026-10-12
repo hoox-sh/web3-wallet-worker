@@ -5,6 +5,7 @@
 
 import { describe, expect, test, mock } from "bun:test";
 import { getConfig, updateConfig, loadChainRpcUrl } from "../src/config.js";
+import { rowTenant } from "../src/index.js";
 import {
   storeTransaction,
   listTransactions,
@@ -166,5 +167,26 @@ describe("web3 transactions tenant isolation", () => {
     expect(stmts.some((s) => /CREATE TABLE IF NOT EXISTS/i.test(s))).toBe(true);
     expect(stmts.some((s) => /ADD COLUMN tenant_id/i.test(s))).toBe(true);
     expect(stmts.some((s) => /CREATE INDEX IF NOT EXISTS/i.test(s))).toBe(true);
+  });
+});
+
+describe("web3 rowTenant message attribution", () => {
+  const env = (extra: Record<string, string> = {}) => ({ ...extra }) as any;
+
+  test("env tenant wins over body when flagged", () => {
+    expect(
+      rowTenant(env({ TENANT_ID: "acme", TENANT_MODE: "true" }), {
+        tenantId: "other",
+      })
+    ).toBe("acme");
+  });
+
+  test("body tenant used on shared path when flag off", () => {
+    expect(rowTenant(env({}), { tenantId: "shared-1" })).toBe("shared-1");
+  });
+
+  test("invalid body tenant falls back to unscoped", () => {
+    expect(rowTenant(env({}), { tenantId: "evil/../x" })).toBe("");
+    expect(rowTenant(env({}))).toBe("");
   });
 });
