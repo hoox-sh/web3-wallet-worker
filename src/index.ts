@@ -10,6 +10,12 @@
 import { ethers } from "ethers";
 import { z } from "zod/v4";
 import {
+  effectiveTenantId,
+  isTenantFlagOn,
+  scopeKey,
+  type TenantEnv,
+} from "@hoox-sh/hoox-shared/tenant";
+import {
   getConfig,
   updateConfig,
   loadChainRpcUrl,
@@ -115,6 +121,17 @@ export interface Env extends AnalyticsEnv, InternalAuthEnv {
   // Service bindings (see wrangler.jsonc services block).
   TELEGRAM_SERVICE: Fetcher;
   ANALYTICS_SERVICE: Fetcher;
+  /** Opt-in tenant isolation (see @hoox-sh/hoox-shared/tenant). Absent = self-host default. */
+  TENANT_ID?: string;
+  TENANT_MODE?: string;
+}
+
+/**
+ * Row owner for wallet_transactions: env tenant when the flag is on,
+ * else "" (unscoped self-host rows).
+ */
+function rowTenant(env: Env): string {
+  return effectiveTenantId(env as TenantEnv) ?? "";
 }
 
 const router = createRouter<Env>();
@@ -152,27 +169,34 @@ async function ensureConfigMigrated(env: Env): Promise<void> {
 
   const run = async (): Promise<void> => {
     try {
+      // Tenant-scoped marker + config key (identity when the flag is off).
+      // The legacy shared namespace is never copied into a tenant scope.
+      const tenantMode = isTenantFlagOn(env);
+      const markerKey = scopeKey(env as TenantEnv, MIGRATION_MARKER_KEY);
+      const configKey = scopeKey(env as TenantEnv, KV_CONFIG_KEY);
       const [marker, existing, legacy] = await Promise.all([
-        env.CONFIG_KV.get(MIGRATION_MARKER_KEY),
-        env.CONFIG_KV.get(KV_CONFIG_KEY),
-        env.WALLET_CONFIG_KV.get(KV_CONFIG_KEY),
+        env.CONFIG_KV.get(markerKey),
+        env.CONFIG_KV.get(configKey),
+        tenantMode
+          ? Promise.resolve(null)
+          : env.WALLET_CONFIG_KV.get(KV_CONFIG_KEY),
       ]);
 
       // Already migrated or destination already populated — nothing to do.
       if (marker !== null) return;
       if (existing !== null) {
         // CONFIG_KV has data but no marker — write marker to prevent re-check.
-        await env.CONFIG_KV.put(MIGRATION_MARKER_KEY, new Date().toISOString());
+        await env.CONFIG_KV.put(markerKey, new Date().toISOString());
         return;
       }
       if (legacy === null) {
         // No source data — still mark so we don't keep checking.
-        await env.CONFIG_KV.put(MIGRATION_MARKER_KEY, new Date().toISOString());
+        await env.CONFIG_KV.put(markerKey, new Date().toISOString());
         return;
       }
 
-      await env.CONFIG_KV.put(KV_CONFIG_KEY, legacy);
-      await env.CONFIG_KV.put(MIGRATION_MARKER_KEY, new Date().toISOString());
+      await env.CONFIG_KV.put(configKey, legacy);
+      await env.CONFIG_KV.put(markerKey, new Date().toISOString());
       logger.info("Migrated wallet config from WALLET_CONFIG_KV to CONFIG_KV");
     } catch (err) {
       logger.error("ensureConfigMigrated failed", {
@@ -217,13 +241,15 @@ async function parseValidatedBody<T extends z.ZodTypeAny>(
 /**
  * Load optional gas-price trap (gwei) from CONFIG_KV.
  * Missing / invalid → null (trap disabled).
+ * @param env optional tenant scope (identity when the flag is off).
  */
 async function loadMaxGasPriceGwei(
-  kv: KVNamespace | undefined
+  kv: KVNamespace | undefined,
+  env?: TenantEnv
 ): Promise<number | null> {
   if (!kv) return null;
   try {
-    const raw = await kv.get(KV_MAX_GAS_PRICE_GWEI);
+    const raw = await kv.get(scopeKey(env, KV_MAX_GAS_PRICE_GWEI));
     if (raw === null || raw === undefined || raw === "") return null;
     const n = parseFloat(raw);
     if (!Number.isFinite(n) || n <= 0) return null;
@@ -243,7 +269,7 @@ async function loadRpcUrlForChain(
   chain: ChainName
 ): Promise<string | undefined> {
   try {
-    const kvUrl = await loadChainRpcUrl(env.CONFIG_KV, chain);
+    const kvUrl = await loadChainRpcUrl(env.CONFIG_KV, chain, env);
     if (kvUrl) return kvUrl;
   } catch {
     // fall through to env
@@ -331,7 +357,11 @@ async function checkIdempotencyReplay(
   key: string | undefined
 ): Promise<Response | null> {
   if (!key) return null;
-  const existing = await getTransaction(env.TRANSACTIONS_DB, key);
+  const existing = await getTransaction(
+    env.TRANSACTIONS_DB,
+    key,
+    rowTenant(env)
+  );
   if (!existing) return null;
   return createJsonResponse(
     { txHash: existing.txHash, id: existing.id, deduped: true },
@@ -626,7 +656,7 @@ router.get(
       if (walletResult instanceof Response) return walletResult;
       const { wallet, source } = walletResult;
       await ensureConfigMigrated(env);
-      const config = await getConfig(env.CONFIG_KV);
+      const config = await getConfig(env.CONFIG_KV, env);
 
       return createJsonResponse(
         {
@@ -668,7 +698,7 @@ router.get(
   ): Promise<Response> => {
     try {
       await ensureConfigMigrated(env);
-      const config = await getConfig(env.CONFIG_KV);
+      const config = await getConfig(env.CONFIG_KV, env);
       return createJsonResponse(config, 200);
     } catch (error: unknown) {
       logger.error("Error in GET /config", { error });
@@ -692,7 +722,7 @@ router.put(
       if (!body) return Errors.badRequest("Invalid JSON body");
 
       await ensureConfigMigrated(env);
-      const current = await getConfig(env.CONFIG_KV);
+      const current = await getConfig(env.CONFIG_KV, env);
 
       // Deep merge: shallow `{ ...current, ...body }` would replace
       // the entire `security` and `dex` sub-objects with whatever
@@ -709,7 +739,7 @@ router.put(
         dex: { ...current.dex, ...(body.dex ?? {}) },
         security: { ...current.security, ...(body.security ?? {}) },
       };
-      await updateConfig(env.CONFIG_KV, merged);
+      await updateConfig(env.CONFIG_KV, merged, env);
 
       return createJsonResponse(
         { message: "Configuration updated", config: merged },
@@ -847,8 +877,8 @@ router.post(
       const amount = amountParsed.value;
       await ensureConfigMigrated(env);
       const [config, maxGasGwei] = await Promise.all([
-        getConfig(env.CONFIG_KV),
-        loadMaxGasPriceGwei(env.CONFIG_KV),
+        getConfig(env.CONFIG_KV, env),
+        loadMaxGasPriceGwei(env.CONFIG_KV, env),
       ]);
 
       // Gas price trap (fail-closed when over limit)
@@ -915,7 +945,7 @@ router.post(
         tokenAddress: body.tokenAddress,
         createdAt: Date.now(),
       };
-      await storeTransaction(env.TRANSACTIONS_DB, record);
+      await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env));
 
       trackApiCall(env, ctx, "/transfer", 200);
       return createJsonResponse({ txHash, id: record.id }, 200);
@@ -985,8 +1015,8 @@ router.post(
       }
       await ensureConfigMigrated(env);
       const [config, maxGasGwei] = await Promise.all([
-        getConfig(env.CONFIG_KV),
-        loadMaxGasPriceGwei(env.CONFIG_KV),
+        getConfig(env.CONFIG_KV, env),
+        loadMaxGasPriceGwei(env.CONFIG_KV, env),
       ]);
 
       const gasCheck = await checkGasPriceLimit({
@@ -1034,7 +1064,7 @@ router.post(
         tokenAddress: body.tokenAddress,
         createdAt: Date.now(),
       };
-      await storeTransaction(env.TRANSACTIONS_DB, record);
+      await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env));
 
       trackApiCall(env, ctx, "/approve", 200);
       return createJsonResponse({ txHash, id: record.id }, 200);
@@ -1156,7 +1186,7 @@ async function handleSolanaSwap(
   }
 
   await ensureConfigMigrated(env);
-  const config = await getConfig(env.CONFIG_KV);
+  const config = await getConfig(env.CONFIG_KV, env);
   if (!config.enabled) {
     return Errors.forbidden("Wallet is disabled");
   }
@@ -1266,7 +1296,7 @@ async function handleSolanaSwap(
     tokenAddress: inputMint,
     createdAt: Date.now(),
   };
-  await storeTransaction(env.TRANSACTIONS_DB, record);
+  await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env));
 
   safeWaitUntil(
     ctx,
@@ -1350,8 +1380,8 @@ router.post(
       }
       await ensureConfigMigrated(env);
       const [config, maxGasGwei] = await Promise.all([
-        getConfig(env.CONFIG_KV),
-        loadMaxGasPriceGwei(env.CONFIG_KV),
+        getConfig(env.CONFIG_KV, env),
+        loadMaxGasPriceGwei(env.CONFIG_KV, env),
       ]);
 
       const chainConfig = DEFAULT_CHAIN_CONFIGS[chain];
@@ -1461,7 +1491,7 @@ router.post(
           body.tokenIn === ethers.ZeroAddress ? undefined : body.tokenIn,
         createdAt: Date.now(),
       };
-      await storeTransaction(env.TRANSACTIONS_DB, record);
+      await storeTransaction(env.TRANSACTIONS_DB, record, rowTenant(env));
 
       safeWaitUntil(
         ctx,
@@ -1529,6 +1559,7 @@ router.get(
         status,
         limit,
         offset,
+        tenantId: rowTenant(env),
       });
 
       return createJsonResponse({ transactions: txs, count: txs.length }, 200);

@@ -6,6 +6,7 @@
 // workers/web3-wallet-worker/src/config.ts
 
 import type { KVNamespace } from "@cloudflare/workers-types";
+import { scopeKey, type TenantEnv } from "@hoox-sh/hoox-shared/tenant";
 import { z } from "zod/v4";
 import type {
   WalletConfig,
@@ -64,10 +65,14 @@ const WalletConfigFileSchema = z
 /**
  * Load wallet configuration from KV, falling back to defaults.
  * Never fails — returns defaults on any error.
+ * @param env optional tenant scope (identity when the flag is off).
  */
-export async function getConfig(kv: KVNamespace): Promise<WalletConfig> {
+export async function getConfig(
+  kv: KVNamespace,
+  env?: TenantEnv
+): Promise<WalletConfig> {
   try {
-    const raw = await kv.get(KV_CONFIG_KEY);
+    const raw = await kv.get(scopeKey(env, KV_CONFIG_KEY));
     if (!raw) return { ...DEFAULT_WALLET_CONFIG, updatedAt: Date.now() };
     const result = WalletConfigFileSchema.safeParse(JSON.parse(raw));
     if (!result.success) {
@@ -87,13 +92,15 @@ export async function getConfig(kv: KVNamespace): Promise<WalletConfig> {
 
 /**
  * Persist wallet configuration to KV.
+ * @param env optional tenant scope (identity when the flag is off).
  */
 export async function updateConfig(
   kv: KVNamespace,
-  config: WalletConfig
+  config: WalletConfig,
+  env?: TenantEnv
 ): Promise<void> {
   config.updatedAt = Date.now();
-  await kv.put(KV_CONFIG_KEY, JSON.stringify(config));
+  await kv.put(scopeKey(env, KV_CONFIG_KEY), JSON.stringify(config));
 }
 
 /**
@@ -121,14 +128,16 @@ export function getChainRpcEnvKey(chain: ChainName): string {
 /**
  * Load a per-chain RPC URL override from KV. Returns null when unset.
  * Never throws — callers fall through to env/static defaults.
+ * @param env optional tenant scope (identity when the flag is off).
  */
 export async function loadChainRpcUrl(
   kv: KVNamespace | undefined,
-  chain: ChainName
+  chain: ChainName,
+  env?: TenantEnv
 ): Promise<string | null> {
   if (!kv) return null;
   try {
-    const raw = await kv.get(getChainRpcKvKey(chain));
+    const raw = await kv.get(scopeKey(env, getChainRpcKvKey(chain)));
     if (!raw || raw.trim() === "") return null;
     return raw.trim();
   } catch {
